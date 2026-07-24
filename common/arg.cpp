@@ -2793,6 +2793,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
     add_opt(common_arg(
+        {"--moe-cache-profile"}, "FNAME",
+        "routing profile CSV (from llama-moe-trace) used to pick which experts to cache in GPU memory",
+        [](common_params & params, const std::string & value) {
+            params.moe_cache_profile = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_PROFILE"));
+    add_opt(common_arg(
+        {"--moe-cache-slots"}, "N",
+        "number of routed experts per layer to keep resident in GPU memory (default: 0 = disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_cache_slots = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_SLOTS"));
+    add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
         "(dense models; for MoE expert weights use --n-cpu-moe)",
