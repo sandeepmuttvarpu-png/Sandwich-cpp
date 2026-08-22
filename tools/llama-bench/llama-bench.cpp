@@ -363,6 +363,7 @@ struct cmd_params {
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<bool>                sched_async_cpu;
     std::vector<bool>                no_host;
     std::vector<bool>                repack;
     std::vector<size_t>              fit_params_target;
@@ -409,6 +410,7 @@ static const cmd_params cmd_params_defaults = {
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* sched_async_cpu      */ { true },
     /* no_host              */ { false },
     /* repack               */ { llama_model_default_params().use_extra_bufts },
     /* fit_params_target    */ { 0 },
@@ -484,6 +486,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                                    (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                      (default: 0)\n");
+    printf("  --sched-async-cpu <0|1>                           (default: 1)\n");
     printf("  --no-host <0|1>                                   (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("  --repack <0|1>                                    (default: %s)\n", join(cmd_params_defaults.repack, ",").c_str());
     printf("\n");
@@ -902,6 +905,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "--sched-async-cpu") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.sched_async_cpu.insert(params.sched_async_cpu.end(), p.begin(), p.end());
             } else if (arg == "--no-host") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1180,6 +1190,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
     }
+    if (params.sched_async_cpu.empty()) {
+        params.sched_async_cpu = cmd_params_defaults.sched_async_cpu;
+    }
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
     }
@@ -1234,6 +1247,7 @@ struct cmd_params_instance {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool               embeddings;
     bool               no_op_offload;
+    bool               sched_async_cpu;
     bool               no_host;
     bool               repack;
     size_t             fit_target;
@@ -1314,6 +1328,7 @@ struct cmd_params_instance {
         cparams.flash_attn_type = flash_attn;
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
+        cparams.sched_async_cpu = sched_async_cpu;
         cparams.swa_full        = false;
 
         return cparams;
@@ -1341,6 +1356,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & rpk : params.repack)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
+    for (const auto & sac : params.sched_async_cpu)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
@@ -1382,6 +1398,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
+                /* .sched_async_cpu       = */ sac,
                 /* .no_host               = */ noh,
                 /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
@@ -1420,6 +1437,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
+                /* .sched_async_cpu       = */ sac,
                 /* .no_host               = */ noh,
                 /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
@@ -1458,6 +1476,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
+                /* .sched_async_cpu       = */ sac,
                 /* .no_host               = */ noh,
                 /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
@@ -1501,6 +1520,7 @@ struct test {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool                     embeddings;
     bool                     no_op_offload;
+    bool                     sched_async_cpu;
     bool                     no_host;
     bool                     repack;
     size_t                   fit_target;
@@ -1542,6 +1562,7 @@ struct test {
         tensor_buft_overrides = inst.tensor_buft_overrides;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
+        sched_async_cpu = inst.sched_async_cpu;
         no_host        = inst.no_host;
         repack         = inst.repack;
         fit_target     = inst.fit_target;
@@ -1604,7 +1625,7 @@ struct test {
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
-            "no_op_offload",  "no_host",        "repack",        "fit_target",    "fit_min_ctx",
+            "no_op_offload",  "sched_async_cpu", "no_host",        "repack",        "fit_target",    "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1622,7 +1643,7 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
-            field == "embeddings" || field == "no_host" || field == "repack") {
+            field == "embeddings" || field == "no_host" || field == "repack" || field == "sched_async_cpu") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1701,6 +1722,7 @@ struct test {
                                             lazy_mode_str(lazy_mode),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
+                                            std::to_string(sched_async_cpu),
                                             std::to_string(no_host),
                                             std::to_string(repack),
                                             std::to_string(fit_target),
@@ -1899,6 +1921,9 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return 3;
         }
+        if (field == "sched_async_cpu") {
+            return 4;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1932,6 +1957,9 @@ struct markdown_printer : public printer {
         }
         if (field == "no_op_offload") {
             return "nopo";
+        }
+        if (field == "sched_async_cpu") {
+            return "sac";
         }
         if (field == "no_host") {
             return "noh";
@@ -2028,6 +2056,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
+        }
+        if (params.sched_async_cpu.size() > 1 || params.sched_async_cpu != cmd_params_defaults.sched_async_cpu) {
+            fields.emplace_back("sched_async_cpu");
         }
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");

@@ -2304,14 +2304,25 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             return down;
         };
 
-        ggml_tensor * hot = build_pack_chain(moe_cache->ffn_gate_exps_hot, moe_cache->ffn_up_exps_hot, moe_cache->ffn_down_exps_hot, ids_hot);
-        cb(hot, "ffn_moe_down_hot", il);
-
+        // cold chain is built first so its nodes precede the hot chain in the
+        // graph: the scheduler then emits [cold split, hot split] and, with
+        // async CPU splits, computes the cold chain on a worker while the
+        // hot chain (which has no CPU inputs) runs concurrently on the GPU.
+        // pinning the merge to CPU keeps it out of the hot split so the hot
+        // split stays free of cross-backend inputs.
         ggml_tensor * cold = build_pack_chain(gate_exps, up_exps, down_exps, ids_cold);
         cb(cold, "ffn_moe_down_cold", il);
 
-        experts = ggml_add(ctx0, hot, cold);
+        ggml_tensor * hot = build_pack_chain(moe_cache->ffn_gate_exps_hot, moe_cache->ffn_up_exps_hot, moe_cache->ffn_down_exps_hot, ids_hot);
+        cb(hot, "ffn_moe_down_hot", il);
+
+        experts = ggml_add(ctx0, cold, hot);
         cb(experts, "ffn_moe_down", il);
+        // decode-size batches only: for large (prefill) batches the CPU merge
+        // and its per-layer activation copies cost more than the overlap hides
+        if (cparams.sched_async_cpu && n_tokens <= 8) {
+            ggml_backend_sched_set_tensor_backend(sched, experts, backend_cpu);
+        }
     } else if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
         ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff*2, n_expert_used, n_tokens]
