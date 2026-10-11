@@ -1310,20 +1310,28 @@ void sandwich_auto_dispatch(common_params & params) {
     if (is_moe) {
         LOG_INF("   -> Policy: MoE Expert Slab Staging Mode\n");
         LOG_INF("   -> Setting n_gpu_layers = 99, moe_expert_cache_size = 32, cache_ram = 0\n");
+        LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
         params.n_gpu_layers          = -1;
         params.moe_expert_cache_size = 32;
         params.cache_ram             = 0;
         params.cache_ram_mib         = 0;
+        params.cache_type_k          = GGML_TYPE_TURBO4_0;
+        params.cache_type_v          = GGML_TYPE_TURBO4_0;
+        params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     } else {
         LOG_INF("   -> Policy: Dense Memory-Constrained Offload Mode\n");
         LOG_INF("   -> Setting n_gpu_layers = 18, parallel decoding enabled\n");
+        LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
         params.n_gpu_layers          = 18;
         params.moe_expert_cache_size = 0;
         params.parallel_decoding     = true;
         if (params.n_parallel <= 1) {
             params.n_parallel = 4;
         }
-        params.cont_batching = true;
+        params.cont_batching         = true;
+        params.cache_type_k          = GGML_TYPE_TURBO4_0;
+        params.cache_type_v          = GGML_TYPE_TURBO4_0;
+        params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     }
     LOG_INF("=======================================================\n\n");
 }
