@@ -1310,6 +1310,9 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             exit(0);
         }
         params.lr.init();
+        if (params.sandwich_auto && !params.model.path.empty()) {
+            sandwich_auto_dispatch(params);
+        }
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
         ctx_arg.params = params_org;
@@ -2797,6 +2800,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             llm_add_n_cpu_ffn_overrides(value, LLM_FFN_DENSE_REGEX, params.tensor_buft_overrides);
         }
     ).set_env("LLAMA_ARG_N_CPU_FFN"));
+    add_opt(common_arg(
+        {"--sandwich-auto"},
+        "Project Sandwich: automatically detect MoE vs. Dense and apply hardware-optimal offload & cache policy",
+        [](common_params & params) {
+            params.sandwich_auto = true;
+        }
+    ).set_env("LLAMA_ARG_SANDWICH_AUTO"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

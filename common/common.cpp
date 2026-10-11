@@ -1233,8 +1233,105 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     return info;
 }
 
+void sandwich_auto_dispatch(common_params & params) {
+    if (!params.sandwich_auto) {
+        return;
+    }
+
+    if (params.model.path.empty()) {
+        return;
+    }
+
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(params.model.path.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        LOG_WRN("🥪 [Sandwich Auto-Dispatch] Failed to open GGUF file: %s\n", params.model.path.c_str());
+        return;
+    }
+
+    auto get_kv_i64 = [](const struct gguf_context * ctx, int64_t key_id) -> int64_t {
+        if (key_id < 0) return 0;
+        const enum gguf_type type = gguf_get_kv_type(ctx, key_id);
+        switch (type) {
+            case GGUF_TYPE_UINT8:   return gguf_get_val_u8(ctx, key_id);
+            case GGUF_TYPE_INT8:    return gguf_get_val_i8(ctx, key_id);
+            case GGUF_TYPE_UINT16:  return gguf_get_val_u16(ctx, key_id);
+            case GGUF_TYPE_INT16:   return gguf_get_val_i16(ctx, key_id);
+            case GGUF_TYPE_UINT32:  return gguf_get_val_u32(ctx, key_id);
+            case GGUF_TYPE_INT32:   return gguf_get_val_i32(ctx, key_id);
+            case GGUF_TYPE_UINT64:  return (int64_t) gguf_get_val_u64(ctx, key_id);
+            case GGUF_TYPE_INT64:   return gguf_get_val_i64(ctx, key_id);
+            default:                return 0;
+        }
+    };
+
+    int64_t expert_count = 0;
+
+    // 1. Direct check for general.expert_count
+    int64_t key_expert_count = gguf_find_key(gguf_ctx.get(), "general.expert_count");
+    if (key_expert_count >= 0) {
+        expert_count = get_kv_i64(gguf_ctx.get(), key_expert_count);
+    }
+
+    // 2. Fallback: check architecture specific expert counts
+    if (expert_count == 0) {
+        int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+        if (arch_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), arch_id) == GGUF_TYPE_STRING) {
+            const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+            if (!arch.empty()) {
+                const std::string arch_exp_key = arch + ".expert_count";
+                int64_t key_exp = gguf_find_key(gguf_ctx.get(), arch_exp_key.c_str());
+                if (key_exp >= 0) {
+                    expert_count = get_kv_i64(gguf_ctx.get(), key_exp);
+                }
+                if (expert_count == 0) {
+                    const std::string arch_used_key = arch + ".expert_used_count";
+                    int64_t key_used = gguf_find_key(gguf_ctx.get(), arch_used_key.c_str());
+                    if (key_used >= 0) {
+                        expert_count = get_kv_i64(gguf_ctx.get(), key_used);
+                    }
+                }
+            }
+        }
+    }
+
+    const bool is_moe = (expert_count > 0);
+
+    LOG_INF("\n=======================================================\n");
+    LOG_INF("🥪 [Project Sandwich] Architecture-Aware Auto-Dispatcher\n");
+    LOG_INF("   Model Path:    %s\n", params.model.path.c_str());
+    LOG_INF("   Topology:      %s (experts = %" PRId64 ")\n",
+            is_moe ? "MIXTURE OF EXPERTS (MoE)" : "DENSE TRANSFORMER", expert_count);
+
+    if (is_moe) {
+        LOG_INF("   -> Policy: MoE Expert Slab Staging Mode\n");
+        LOG_INF("   -> Setting n_gpu_layers = 99, moe_expert_cache_size = 32, cache_ram = 0\n");
+        params.n_gpu_layers          = -1;
+        params.moe_expert_cache_size = 32;
+        params.cache_ram             = 0;
+        params.cache_ram_mib         = 0;
+    } else {
+        LOG_INF("   -> Policy: Dense Memory-Constrained Offload Mode\n");
+        LOG_INF("   -> Setting n_gpu_layers = 18, parallel decoding enabled\n");
+        params.n_gpu_layers          = 18;
+        params.moe_expert_cache_size = 0;
+        params.parallel_decoding     = true;
+        if (params.n_parallel <= 1) {
+            params.n_parallel = 4;
+        }
+        params.cont_batching = true;
+    }
+    LOG_INF("=======================================================\n\n");
+}
+
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    sandwich_auto_dispatch(params);
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
