@@ -200,6 +200,8 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
 
+    ggml_tensor * get_turbo_innerq_scale_inv() const { return turbo_innerq_scale_inv; }
+
     //
     // preparation API
     //
@@ -316,6 +318,11 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+
+    // TurboQuant tensors
+    ggml_tensor * turbo_rotation = nullptr;
+    ggml_tensor * turbo_rotation_inv = nullptr;
+    ggml_tensor * turbo_innerq_scale_inv = nullptr;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
@@ -437,6 +444,8 @@ public:
 
     // see llama_kv_cache::get_prev_tokens()
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
+
+    ggml_tensor * get_turbo_innerq_scale_inv() const override;
 
 private:
     llama_memory_status status;

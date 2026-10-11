@@ -410,6 +410,17 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
                 ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<576, 512,  4>(ctx, dst);
             }
         } break;
+        case 640: {
+            // Padded turbo KV cache for GLM-4.7 Flash (K head_dim=576 zero-padded to 640).
+            // D=640 shared memory (Q storage = ncols*(DKQ/2+4)*4) exceeds hardware limit at ncols1>=4.
+            // Cap at ncols1=2 (ncols=32): Q=32*324*4=41KB + KV≈37KB = ~78KB total.
+            GGML_ASSERT(V->ne[0] == 512);
+            if (Q->ne[1] <= 1) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<640, 512, 1, 16>(ctx, dst);
+            } else {
+                ggml_cuda_flash_attn_ext_mma_f16_case<640, 512, 2, 16>(ctx, dst);
+            }
+        } break;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -490,6 +501,12 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q8_0, BF16)
     FATTN_VEC_CASES_ALL_D(BF16, BF16)
 
+    FATTN_VEC_CASES_ALL_D(TURBO4_0, TURBO4_0)
+    FATTN_VEC_CASES_ALL_D(TURBO4_0, Q8_0)
+    FATTN_VEC_CASES_ALL_D(Q8_0,     TURBO4_0)
+    FATTN_VEC_CASES_ALL_D(F16,      TURBO4_0)
+    FATTN_VEC_CASES_ALL_D(TURBO4_0, F16)
+
     return nullptr;
 }
 
@@ -532,6 +549,7 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_TURBO4_0:
             return true;
         default:
             return false;
@@ -611,6 +629,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
             break;
         case 576:
+        case 640:
             if (V->ne[0] != 512) {
                 return BEST_FATTN_KERNEL_NONE;
             }
@@ -624,6 +643,17 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     if (!ggml_cuda_fattn_kv_type_supported(K->type) || !ggml_cuda_fattn_kv_type_supported(V->type)) {
         return BEST_FATTN_KERNEL_NONE;
+    }
+
+    // turbo VEC/MMA kernels are instantiated for head dims that are multiples of 64
+    {
+        auto is_turbo = [](ggml_type t) {
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0;
+        };
+        if ((is_turbo(K->type) && K->ne[0] % 64 != 0) ||
+            (is_turbo(V->type) && V->ne[0] % 64 != 0)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
     }
 
     if (mask && mask->ne[2] != 1) {
@@ -664,7 +694,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
-    const int ncols2_max = Q->ne[0] == 320 ? 32 : ((Q->ne[0] == 576 || Q->ne[0] == 192) ? 16 : 8);
+    const int ncols2_max = Q->ne[0] == 320 ? 32 : ((Q->ne[0] == 576 || Q->ne[0] == 640 || Q->ne[0] == 192) ? 16 : 8);
     int gqa_ratio_eff = 1;
     while (max_bias == 0.0f && gqa_ratio % (2*gqa_ratio_eff) == 0 && gqa_ratio_eff < ncols2_max) {
         gqa_ratio_eff *= 2;
@@ -757,6 +787,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
+
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");

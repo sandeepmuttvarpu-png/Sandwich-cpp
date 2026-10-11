@@ -430,7 +430,10 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_TURBO2_0 = 43, // TurboQuant 2-bit KV cache: WHT + 2-bit PolarQuant (runtime-only KV type)
+        GGML_TYPE_TURBO3_0 = 44, // TurboQuant 3-bit KV cache: WHT + 3-bit PolarQuant (runtime-only KV type)
+        GGML_TYPE_TURBO4_0 = 45, // TurboQuant 4-bit KV cache: WHT + 4-bit PolarQuant (runtime-only KV type)
+        GGML_TYPE_COUNT   = 46,
     };
 
     // [TAG_GGML_PREC]
@@ -581,6 +584,7 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
+        GGML_OP_TURBO_WHT,
         GGML_OP_LIGHTNING_INDEXER,
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
@@ -2658,6 +2662,16 @@ extern "C" {
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
             int64_t               K);
+
+    // TurboQuant Walsh-Hadamard Transform (O(d log d) rotation for KV cache compression)
+    // Applies WHT rotation to 128-element groups along ne[0]: sign1 → butterfly → sign2 → normalize
+    // direction: 0 = forward (signs1 → WHT → signs2), 1 = inverse (signs2 → WHT → signs1)
+    GGML_API struct ggml_tensor * ggml_turbo_wht(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   direction,
+            int                   group_size,    // 0 = auto (64 or 128 from ne[0])
+            struct ggml_tensor  * scale);        // NULL = no InnerQ scaling
 
     // DSA lightning indexer
     //
