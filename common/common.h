@@ -594,6 +594,10 @@ struct common_params {
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
     size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    int32_t moe_expert_cache_size = 0; // MoE dynamic expert cache slots (BeeLlama compatibility)
+    int32_t cache_ram = 0; // cache ram limit (BeeLlama compatibility: 0 = disable host paging)
+    bool sandwich_auto = false; // Project Sandwich architecture-aware dispatch
+    bool parallel_decoding = false; // enable parallel decoding for dense models (Project Sandwich / thecodacus)
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
@@ -977,6 +981,9 @@ struct common_gguf_info {
 };
 
 common_gguf_info common_get_gguf_info(const std::string & fname);
+
+// Project Sandwich: Architecture-aware auto-dispatch
+void sandwich_auto_dispatch(common_params & params);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {

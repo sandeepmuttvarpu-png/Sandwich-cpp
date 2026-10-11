@@ -337,6 +337,9 @@ void ggml_backend_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backe
 }
 
 enum ggml_backend_buffer_usage ggml_backend_buffer_get_usage(ggml_backend_buffer_t buffer) {
+    if (buffer == nullptr) {
+        return GGML_BACKEND_BUFFER_USAGE_ANY;
+    }
     GGML_ASSERT(buffer);
     return buffer->usage;
 }
