@@ -6,8 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CUDA: 12.0+](https://img.shields.io/badge/CUDA-12.0%2B-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 [![Arch: x86__64](https://img.shields.io/badge/Arch-x86__64-orange.svg)](#)
+[![Sandwich Deck: Native](https://img.shields.io/badge/Companion-Sandwich%20Deck-blueviolet.svg)](https://github.com/sandeepmuttvarpu-png/sandwich-deck)
 
-**Sandwich.cpp** is a specialized fork of [`llama.cpp`](https://github.com/ggerganov/llama.cpp) engineered to solve the memory and bandwidth bottleneck of running **30B–35B Mixture of Experts (MoE)** and large dense models on consumer hardware (such as 8GB VRAM cards).
+**Sandwich.cpp** is a high-performance fork of [`llama.cpp`](https://github.com/ggerganov/llama.cpp) engineered to solve the memory and bandwidth bottleneck of running **30B–35B Mixture of Experts (MoE)** and large dense models on consumer hardware (such as 8GB VRAM laptop and desktop GPUs).
 
 By fusing **BeeLlama's dynamic MoE slab offloading** with **TheTom's TurboQuant 4-bit compressed KV cache**, patching critical C++ buffer assertion crashes on GLM architectures, and introducing an **Architecture-Aware Auto-Dispatcher (`--sandwich-auto`)**, Sandwich.cpp achieves up to **+78.3% faster MoE inference** with zero manual configuration.
 
@@ -25,6 +26,25 @@ By fusing **BeeLlama's dynamic MoE slab offloading** with **TheTom's TurboQuant 
 | **NVIDIA Nemotron 4B** | 8K | — | — | **66.67 tk/s** (3,050 PP) 🥇 | 100% GPU offload |
 
 *See full benchmark details and methodology in [`docs/benchmarks.md`](docs/benchmarks.md).*
+
+---
+
+## 🌟 The Killer Pros of Sandwich.cpp
+
+1. **Consumer VRAM Multiplier (Run 30B–35B MoE on 8GB GPUs):**
+   - Enables models that previously required 24GB–48GB VRAM cards to run on 8GB consumer laptops and desktops at fluid, interactive generation speeds (**27–35 tokens/second**).
+2. **TurboQuant 4-Bit KV Cache Compression (`turbo4`):**
+   - Reduces KV cache memory footprint by **75%** with negligible loss in reasoning accuracy, unlocking 32K–64K context windows without exhausting VRAM.
+3. **True Dynamic MoE Slab Caching:**
+   - Active expert pathways are dynamically staged into GPU VRAM slabs instead of static layer-by-layer offloading, eliminating PCIe host paging stalls.
+4. **Zero-Configuration Simplicity (`--sandwich-auto`):**
+   - Automatically detects MoE vs. Dense topologies from GGUF metadata and sets optimal GPU layer offloads, cache slots, continuous batching, and quantization schemes.
+5. **Fixed GLM & Modern MoE Architectures:**
+   - Out-of-the-box stability for GLM-4.7 Flash and Multi-Head Latent Attention (MLA) models that crash on other forks.
+6. **Native Speculative Decoding (`-md`):**
+   - Accelerates generation throughput by up to 1.5x via speculative draft model verification with zero loss in generation fidelity.
+7. **Drop-in OpenAI Server HUD:**
+   - Full compatibility with the OpenAI REST specification (`/v1/chat/completions`, `/v1/models`, `/health`), compatible with any UI, client library, or autonomous agent framework.
 
 ---
 
@@ -91,9 +111,26 @@ Ported C++ reference Walsh-Hadamard transform operations into `ggml/src/ggml-cpu
 
 ---
 
+## ⚠️ What Still Needs to Be Fixed (Known Limitations & Roadmap)
+
+While Sandwich.cpp is production-stable on single-GPU systems, the following areas are under active development:
+
+1. **Multi-GPU Dynamic MoE Slicing:**
+   - The dynamic MoE expert cache currently optimizes for a single primary GPU. Multi-GPU setups (`-ts` / `--tensor-split`) with dynamic expert slabs require deeper synchronization to avoid bus stalls across PCIe/NVLink.
+2. **Cross-Tokenizer Speculative Drafting:**
+   - Speculative decoding (`-md`) strictly requires identical vocabulary representations (e.g., Llama-3 128k target + Llama-3 128k drafter). Pairing cross-family models (e.g. Mistral 32k target + Llama 128k drafter) triggers token ID mismatches. A dynamic vocabulary projection/remapping layer is planned.
+3. **AMD ROCm (HIP) & Apple Silicon (Metal) TurboQuant Kernels:**
+   - TurboQuant Walsh-Hadamard kernels are currently accelerated natively in CUDA and reference C++ on CPU. Native Metal Shading Language (MSL) and ROCm/HIP kernel implementations are in progress.
+4. **Runtime Context KV Downscaling:**
+   - Under extremely long context sessions (64K+), automatic dynamic downscaling from `turbo4` to `turbo2` without restarting the session or resetting the KV cache slots.
+5. **Vision-Language MoE Projector Offloading:**
+   - Multimodal projector tensors (`mmproj`) for vision-MoE models currently bypass the dynamic expert cache and require static allocation.
+
+---
+
 ## 🥪 Architecture-Aware Auto-Dispatcher (`--sandwich-auto`)
 
-No more guessing layer budgets or tweaking 6+ command-line flags. The `--sandwich-auto` flag inspects model topology at load time and configures hardware-optimal parameters automatically:
+The `--sandwich-auto` flag inspects model topology at load time and configures hardware-optimal parameters automatically:
 
 ```bash
 ./build/bin/llama-server -m /path/to/model.gguf --sandwich-auto
@@ -112,44 +149,29 @@ No more guessing layer budgets or tweaking 6+ command-line flags. The `--sandwic
 
 ---
 
-## 🚀 Building From Source
+## 🛠️ How to Use It
 
-### Prerequisites
-- **CMake** 3.14+
-- **GCC / Clang** with C++17 support
-- **CUDA Toolkit** 12.0+ (for NVIDIA GPU acceleration)
-
-### Compile with CUDA Support
-
+### 1. Interactive Terminal CLI
 ```bash
-git clone https://github.com/sandeepmuttvarpu-png/sandwich-cpp.git
-cd sandwich-cpp
-
-mkdir build
-cd build
-cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release -j$(nproc)
-```
-
-The resulting binaries will be in `build/bin/`:
-- `llama-server`: High-performance OpenAI-compatible HTTP server.
-- `llama-cli`: Terminal interactive completion engine.
-- `llama-bench`: Automated benchmarking suite.
-
----
-
-## 📖 Usage Examples
-
-### 1. Launching MoE Models (Nemotron 30B / Qwen 35B / GLM 30B)
-```bash
-./build/bin/llama-server \
+# Launch interactive chat with automatic hardware optimization
+./build/bin/llama-cli \
   -m ~/ai-models/moe/Nemotron-3-Nano-30B-A3B-GGUF/Nemotron-3-Nano-30B-A3B-UD-IQ3_XXS.gguf \
   --sandwich-auto \
-  -c 32768 --port 8081
+  -c 32768
 ```
 
-### 2. Speculative Decoding with Drafter Model (`-md`)
-Accelerate generation up to 1.5x by pairing a large target model with a compatible draft model:
+### 2. OpenAI-Compatible API Server (`llama-server`)
+```bash
+# Run server on port 8081
+./build/bin/llama-server \
+  -m ~/ai-models/moe/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf \
+  --sandwich-auto \
+  --host 0.0.0.0 --port 8081 \
+  -c 32768
+```
+
+### 3. Speculative Decoding with Drafter Model
+Accelerate generation up to 1.5x by pairing a target model with an aligned drafter:
 ```bash
 ./build/bin/llama-server \
   -m ~/ai-models/dense/Llama-3.3-70B-Instruct-GGUF/Llama-3.3-70B-Instruct-UD-IQ2_XXS.gguf \
@@ -157,13 +179,156 @@ Accelerate generation up to 1.5x by pairing a large target model with a compatib
   -ngl 16 -c 8192 --port 8081
 ```
 
-### 3. Granular TurboQuant KV Cache Selection
+### 4. Querying the Server (curl / Python)
+
 ```bash
-./build/bin/llama-cli \
-  -m ~/ai-models/dense/dolphin-2.8-mistral-7b-v02-GGUF/dolphin-2.8-mistral-7b-v02-Q4_K_S.gguf \
-  -ngl 99 -c 32768 \
-  -ctk turbo4 -ctv turbo4 -fa
+curl http://127.0.0.1:8081/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sandwich",
+    "messages": [{"role": "user", "content": "Explain quantum computing in 2 sentences."}],
+    "temperature": 0.7
+  }'
 ```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8081/v1", api_key="sandwich")
+response = client.chat.completions.create(
+    model="sandwich",
+    messages=[{"role": "user", "content": "Write a fast matrix multiplication function in C++."}],
+    stream=True,
+)
+
+for chunk in response:
+    content = chunk.choices[0].delta.content or ""
+    print(content, end="", flush=True)
+```
+
+---
+
+## 🚀 How to Deploy It
+
+### Method 1: Systemd Service (Linux Server / Workstation)
+
+Create a persistent system service to run Sandwich.cpp automatically on boot:
+
+1. Create `/etc/systemd/system/sandwich.service`:
+   ```ini
+   [Unit]
+   Description=Sandwich.cpp High-Performance Local LLM Server
+   After=network.target
+
+   [Service]
+   Type=simple
+   User=sandeep
+   WorkingDirectory=/home/sandeep/dev/sandwich/sandwich-cpp
+   ExecStart=/home/sandeep/dev/sandwich/sandwich-cpp/build/bin/llama-server \
+       -m /home/sandeep/ai-models/moe/Nemotron-3-Nano-30B-A3B-GGUF/Nemotron-3-Nano-30B-A3B-UD-IQ3_XXS.gguf \
+       --sandwich-auto \
+       --host 0.0.0.0 --port 8081 \
+       -c 32768
+   Restart=always
+   RestartSec=3
+   LimitNOFILE=65535
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+2. Enable and start the service:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now sandwich
+   sudo systemctl status sandwich
+   ```
+
+---
+
+### Method 2: Docker Deployment with NVIDIA GPU Acceleration
+
+1. Build the Docker container:
+   ```dockerfile
+   # Dockerfile.sandwich
+   FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+
+   RUN apt-get update && apt-get install -y git cmake build-essential
+   WORKDIR /app
+   COPY . .
+   RUN mkdir build && cd build && \
+       cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release && \
+       cmake --build . --config Release -j$(nproc)
+
+   FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+   RUN apt-get update && apt-get install -y libgomp1 curl && rm -rf /var/lib/apt/lists/*
+   WORKDIR /app
+   COPY --from=builder /app/build/bin/llama-server /usr/local/bin/llama-server
+
+   EXPOSE 8081
+   ENTRYPOINT ["llama-server"]
+   CMD ["--help"]
+   ```
+
+2. Run with GPU support:
+   ```bash
+   docker build -t sandwich-cpp:latest -f Dockerfile.sandwich .
+
+   docker run -d --gpus all \
+     -p 8081:8081 \
+     -v /home/sandeep/ai-models:/models \
+     --name sandwich-server \
+     sandwich-cpp:latest \
+     -m /models/moe/Nemotron-3-Nano-30B-A3B-GGUF/Nemotron-3-Nano-30B-A3B-UD-IQ3_XXS.gguf \
+     --sandwich-auto --host 0.0.0.0 --port 8081 -c 32768
+   ```
+
+---
+
+### Method 3: Reverse Proxy with Nginx (Streaming SSE Optimized)
+
+Ensure `proxy_buffering off;` is set so tokens stream smoothly with zero latency:
+
+```nginx
+server {
+    listen 80;
+    server_name llm.internal;
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+
+        # Disable buffering for realtime Server-Sent Events (SSE) token typewriter
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+}
+```
+
+---
+
+## 🔨 Building From Source
+
+```bash
+git clone https://github.com/sandeepmuttvarpu-png/Sandwich-cpp.git
+cd Sandwich-cpp
+
+mkdir build
+cd build
+cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release -j$(nproc)
+```
+
+Binaries will be placed in `build/bin/`:
+- `llama-server`: High-performance OpenAI-compatible HTTP server.
+- `llama-cli`: Terminal interactive engine.
+- `llama-bench`: Automated benchmark runner.
 
 ---
 
