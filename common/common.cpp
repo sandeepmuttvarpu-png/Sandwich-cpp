@@ -1314,7 +1314,8 @@ static std::string sandwich_find_compatible_drafter(
     const std::string & model_path,
     const std::string & target_arch,
     size_t target_vocab_size,
-    size_t target_embedding_length) {
+    size_t target_embedding_length,
+    const std::string & target_tok_model) {
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -1404,7 +1405,8 @@ static std::string sandwich_find_compatible_drafter(
             if (cand_arch_id < 0 || gguf_get_kv_type(cand_ctx.get(), cand_arch_id) != GGUF_TYPE_STRING) continue;
             std::string cand_arch = gguf_get_val_str(cand_ctx.get(), cand_arch_id);
 
-            bool arch_matches = (cand_arch == target_arch);
+            bool is_gemma_family = (target_arch.rfind("gemma", 0) == 0 && cand_arch.rfind("gemma", 0) == 0);
+            bool arch_matches = (cand_arch == target_arch) || is_gemma_family;
             bool is_assistant_head = (cand_arch == target_arch + "-assistant" || cand_arch.find("assistant") != std::string::npos);
 
             if (!arch_matches && !is_assistant_head) {
@@ -1429,6 +1431,19 @@ static std::string sandwich_find_compatible_drafter(
             if (cand_tokens_id < 0) continue;
             size_t cand_vocab = gguf_get_arr_n(cand_ctx.get(), cand_tokens_id);
             if (cand_vocab != target_vocab_size) continue;
+
+            // Check tokenizer model type (e.g. gemma4 vs llama) to avoid speculative vocab type mismatches
+            if (!target_tok_model.empty()) {
+                int64_t cand_tok_model_id = gguf_find_key(cand_ctx.get(), "tokenizer.ggml.model");
+                if (cand_tok_model_id >= 0 && gguf_get_kv_type(cand_ctx.get(), cand_tok_model_id) == GGUF_TYPE_STRING) {
+                    std::string cand_tok_model = gguf_get_val_str(cand_ctx.get(), cand_tok_model_id);
+                    if (cand_tok_model != target_tok_model) {
+                        LOG_WRN("🥪 [Sandwich Drafter Scanner] Skipping %s: tokenizer model (%s) does not match target (%s)\n",
+                                full_path.c_str(), cand_tok_model.c_str(), target_tok_model.c_str());
+                        continue;
+                    }
+                }
+            }
 
             // Valid matching drafter found!
             if (fsize < best_size) {
@@ -1565,6 +1580,12 @@ void sandwich_auto_dispatch(common_params & params) {
         }
     }
 
+    std::string tok_model;
+    int64_t tok_model_id = gguf_find_key(gguf_ctx.get(), "tokenizer.ggml.model");
+    if (tok_model_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), tok_model_id) == GGUF_TYPE_STRING) {
+        tok_model = gguf_get_val_str(gguf_ctx.get(), tok_model_id);
+    }
+
     const bool is_moe = (expert_count > 0);
 
     LOG_INF("\n=======================================================\n");
@@ -1592,7 +1613,7 @@ void sandwich_auto_dispatch(common_params & params) {
 
         if (!drafter_found) {
             LOG_INF("   -> Scanning model directory tree for compatible speculative drafter...\n");
-            drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size, embedding_length);
+            drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size, embedding_length, tok_model);
             if (!drafter_path.empty()) {
                 drafter_found = true;
             }
