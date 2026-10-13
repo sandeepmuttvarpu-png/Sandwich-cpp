@@ -147,7 +147,7 @@ if __name__ == "__main__":
         (
             "/home/sandeep/ai-models/dense/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf",
             "Qwen3.8-27B (Dense)",
-            "Context N-Gram Lookup (n=12, m=48)"
+            "Qwen3.8-27B-DFlash2-Q4_K_M (DFlash2 Drafter, N=5)"
         )
     ]
 
