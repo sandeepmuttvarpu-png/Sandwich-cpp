@@ -1249,11 +1249,72 @@ static int64_t sandwich_get_kv_i64(const struct gguf_context * ctx, int64_t key_
     }
 }
 
+// Detect and pin to physical Performance-cores on Intel hybrid CPUs (e.g. i7-13620H)
+static void sandwich_tune_pcore_affinity(common_params & params) {
+#if defined(__linux__)
+    std::vector<int> p_cores;
+    uint32_t highest_freq = 0;
+
+    for (int cpu = 0; cpu < GGML_MAX_N_THREADS; ++cpu) {
+        std::string freq_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq";
+        std::ifstream f(freq_path);
+        if (!f.is_open()) break;
+        uint32_t freq = 0;
+        f >> freq;
+        if (freq > highest_freq) {
+            highest_freq = freq;
+        }
+    }
+
+    if (highest_freq > 0) {
+        for (int cpu = 0; cpu < GGML_MAX_N_THREADS; ++cpu) {
+            std::string freq_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq";
+            std::ifstream f(freq_path);
+            if (!f.is_open()) break;
+            uint32_t freq = 0;
+            f >> freq;
+            // Cores operating within 10% of maximum frequency are P-cores
+            if (freq >= highest_freq * 0.90) {
+                std::string sib_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings_list";
+                std::ifstream sib_f(sib_path);
+                int primary_cpu = cpu;
+                if (sib_f.is_open()) {
+                    sib_f >> primary_cpu;
+                }
+                if (primary_cpu == cpu) {
+                    p_cores.push_back(cpu);
+                }
+            }
+        }
+    }
+
+    if (p_cores.size() >= 4 && p_cores.size() < (size_t)std::thread::hardware_concurrency()) {
+        int n_pcores = (int)p_cores.size();
+        LOG_INF("   -> Intel Hybrid Topology: Auto-Pinning %d Threads to Physical P-Cores\n", n_pcores);
+        params.cpuparams.n_threads = n_pcores;
+        params.cpuparams_batch.n_threads = n_pcores;
+        params.cpuparams.mask_valid = true;
+        params.cpuparams_batch.mask_valid = true;
+        std::fill(std::begin(params.cpuparams.cpumask), std::end(params.cpuparams.cpumask), false);
+        std::fill(std::begin(params.cpuparams_batch.cpumask), std::end(params.cpuparams_batch.cpumask), false);
+        for (int c : p_cores) {
+            if (c < GGML_MAX_N_THREADS) {
+                params.cpuparams.cpumask[c] = true;
+                params.cpuparams_batch.cpumask[c] = true;
+            }
+        }
+    }
+#else
+    (void)params;
+#endif
+}
+
 // Scans the model directory tree to discover a compatible speculative drafter model
 static std::string sandwich_find_compatible_drafter(
     const std::string & model_path,
     const std::string & target_arch,
-    size_t target_vocab_size) {
+    size_t target_vocab_size,
+    size_t target_embedding_length) {
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -1342,7 +1403,26 @@ static std::string sandwich_find_compatible_drafter(
             int64_t cand_arch_id = gguf_find_key(cand_ctx.get(), "general.architecture");
             if (cand_arch_id < 0 || gguf_get_kv_type(cand_ctx.get(), cand_arch_id) != GGUF_TYPE_STRING) continue;
             std::string cand_arch = gguf_get_val_str(cand_ctx.get(), cand_arch_id);
-            if (cand_arch != target_arch) continue;
+
+            bool arch_matches = (cand_arch == target_arch);
+            bool is_assistant_head = (cand_arch == target_arch + "-assistant" || cand_arch.find("assistant") != std::string::npos);
+
+            if (!arch_matches && !is_assistant_head) {
+                continue;
+            }
+
+            // Check hidden embedding dimension for assistant heads to avoid tensor multiplication assertions
+            if (is_assistant_head && target_embedding_length > 0) {
+                int64_t cand_embd_id = gguf_find_key(cand_ctx.get(), (cand_arch + ".embedding_length").c_str());
+                if (cand_embd_id >= 0) {
+                    size_t cand_embd = sandwich_get_kv_i64(cand_ctx.get(), cand_embd_id);
+                    if (cand_embd != target_embedding_length) {
+                        LOG_WRN("🥪 [Sandwich Drafter Scanner] Skipping %s: assistant projection dimension (%zu) does not match target (%zu)\n",
+                                full_path.c_str(), cand_embd, target_embedding_length);
+                        continue;
+                    }
+                }
+            }
 
             // Check vocabulary size
             int64_t cand_tokens_id = gguf_find_key(cand_ctx.get(), "tokenizer.ggml.tokens");
@@ -1382,8 +1462,25 @@ static int32_t sandwich_calculate_optimal_layers(
         return 18;
     }
 
-    // Reserve headroom for TurboQuant turbo4 KV cache, activations, and display overhead
-    int64_t usable_weight_mb = (vram_budget_mb >= 7000) ? (vram_budget_mb - 700) : (vram_budget_mb - 600);
+    // Dynamic non-layer memory headroom:
+    // 1. Base overhead: TurboQuant turbo4 KV cache, activations (gallocr pp buffers), display server (~1200 MB)
+    int64_t base_overhead_mb = 1200;
+
+    // 2. Non-layer model tensors (token_embd, output_norm, output.weight) scale with vocab_size * embedding_length
+    int64_t tokens_id = gguf_find_key(ctx, "tokenizer.ggml.tokens");
+    int64_t vocab_size = (tokens_id >= 0) ? gguf_get_arr_n(ctx, tokens_id) : 0;
+    int64_t embd_id = gguf_find_key(ctx, (arch + ".embedding_length").c_str());
+    int64_t embedding_length = (embd_id >= 0) ? sandwich_get_kv_i64(ctx, embd_id) : 0;
+
+    if (vocab_size > 0 && embedding_length > 0) {
+        // Average 0.6 bytes/weight across quantized embedding tables
+        int64_t embd_mb = (vocab_size * embedding_length * 6ULL) / (10ULL * 1024ULL * 1024ULL);
+        base_overhead_mb += embd_mb;
+    } else {
+        base_overhead_mb += 400;
+    }
+
+    int64_t usable_weight_mb = vram_budget_mb - base_overhead_mb;
     if (usable_weight_mb <= 0) usable_weight_mb = 1000;
 
     // Average bytes per transformer layer
@@ -1419,6 +1516,9 @@ void sandwich_auto_dispatch(common_params & params) {
         LOG_WRN("🥪 [Sandwich Auto-Dispatch] Failed to open GGUF file: %s\n", params.model.path.c_str());
         return;
     }
+
+    // Optimize CPU thread allocation and core affinities for hybrid architectures
+    sandwich_tune_pcore_affinity(params);
 
     int64_t expert_count = 0;
 
@@ -1456,6 +1556,15 @@ void sandwich_auto_dispatch(common_params & params) {
         vocab_size = gguf_get_arr_n(gguf_ctx.get(), tokens_id);
     }
 
+    size_t embedding_length = 0;
+    if (!model_arch.empty() && model_arch != "unknown") {
+        std::string key_embd = model_arch + ".embedding_length";
+        int64_t embd_id = gguf_find_key(gguf_ctx.get(), key_embd.c_str());
+        if (embd_id >= 0) {
+            embedding_length = sandwich_get_kv_i64(gguf_ctx.get(), embd_id);
+        }
+    }
+
     const bool is_moe = (expert_count > 0);
 
     LOG_INF("\n=======================================================\n");
@@ -1483,7 +1592,7 @@ void sandwich_auto_dispatch(common_params & params) {
 
         if (!drafter_found) {
             LOG_INF("   -> Scanning model directory tree for compatible speculative drafter...\n");
-            drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size);
+            drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size, embedding_length);
             if (!drafter_path.empty()) {
                 drafter_found = true;
             }
@@ -1515,12 +1624,13 @@ void sandwich_auto_dispatch(common_params & params) {
             params.speculative.draft.cache_type_k = GGML_TYPE_TURBO4_0;
             params.speculative.draft.cache_type_v = GGML_TYPE_TURBO4_0;
         } else {
-            // UNCAPPED VRAM PROFILE: 7.2 GB Cap Lifted
+            // UNCAPPED VRAM PROFILE: 7.2 GB Cap Lifted + Zero-VRAM N-Gram Lookup Speculation
             int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, 7200);
 
-            LOG_INF("   -> No compatible speculative drafter found in model directory tree.\n");
+            LOG_INF("   -> No compatible draft model found in directory tree.\n");
             LOG_INF("   -> Policy: Dense Memory-Constrained Mode (VRAM Cap LIFTED to 7.2 GB)\n");
             LOG_INF("   -> Main Model:   n_gpu_layers = %d (maximum GPU layer offload)\n", optimal_layers);
+            LOG_INF("   -> Speculative:  Activating Zero-VRAM Context N-Gram Lookup Speculation (n=12, m=48)\n");
             LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
 
             params.n_gpu_layers          = optimal_layers;
@@ -1533,6 +1643,14 @@ void sandwich_auto_dispatch(common_params & params) {
             params.cache_type_k          = GGML_TYPE_TURBO4_0;
             params.cache_type_v          = GGML_TYPE_TURBO4_0;
             params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+
+            // Zero-VRAM Context N-Gram Prompt Lookup Speculative Decoding
+            params.speculative.types.clear();
+            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
+            params.speculative.ngram_simple.size_n   = 12; // Search context for matching 12-grams
+            params.speculative.ngram_simple.size_m   = 48; // Propose up to 48 candidate tokens
+            params.speculative.ngram_simple.min_hits = 1;
+            params.speculative.draft.n_max           = 5;
         }
     }
     LOG_INF("=======================================================\n\n");
