@@ -1412,7 +1412,7 @@ static std::string sandwich_find_compatible_drafter(
                     break;
                 }
             }
-            bool is_dflash_pair = (target_arch.find("muse") != std::string::npos && cand_arch.find("dflash") != std::string::npos);
+            bool is_dflash_pair = (cand_arch.find("dflash") != std::string::npos);
             bool arch_matches = (cand_arch == target_arch) || is_same_family || is_dflash_pair;
             bool is_assistant_head = (cand_arch == target_arch + "-assistant" || cand_arch.find("assistant") != std::string::npos);
 
@@ -1420,14 +1420,14 @@ static std::string sandwich_find_compatible_drafter(
                 continue;
             }
 
-            // Check hidden embedding dimension for assistant heads to avoid tensor multiplication assertions
-            if (is_assistant_head && target_embedding_length > 0) {
+            // Check hidden embedding dimension for assistant heads and dflash models to avoid tensor multiplication assertions
+            if ((is_assistant_head || is_dflash_pair) && target_embedding_length > 0) {
                 int64_t cand_embd_out_id = gguf_find_key(cand_ctx.get(), (cand_arch + ".embedding_length_out").c_str());
                 int64_t cand_embd_id = (cand_embd_out_id >= 0) ? cand_embd_out_id : gguf_find_key(cand_ctx.get(), (cand_arch + ".embedding_length").c_str());
                 if (cand_embd_id >= 0) {
                     size_t cand_embd = sandwich_get_kv_i64(cand_ctx.get(), cand_embd_id);
                     if (cand_embd != target_embedding_length) {
-                        LOG_WRN("🥪 [Sandwich Drafter Scanner] Skipping %s: assistant projection dimension (%zu) does not match target (%zu)\n",
+                        LOG_WRN("🥪 [Sandwich Drafter Scanner] Skipping %s: projection dimension (%zu) does not match target (%zu)\n",
                                 full_path.c_str(), cand_embd, target_embedding_length);
                         continue;
                     }
@@ -1629,9 +1629,9 @@ void sandwich_auto_dispatch(common_params & params) {
 
         if (drafter_found) {
             // CAPPED VRAM PROFILE: 6.0 GB Cap for Main Model, Drafter 100% in VRAM
-            // Assistant heads or large-vocab models (>150k) allocate dual gallocr compute graphs; use 5.0 GB to stay under 8GB TGP.
             bool is_assistant = (drafter_path.find("assistant") != std::string::npos);
-            int64_t main_budget_mb = (is_assistant || vocab_size > 150000) ? 5000 : 6000;
+            bool is_dflash = (drafter_path.find("dflash") != std::string::npos || drafter_path.find("DFlash") != std::string::npos);
+            int64_t main_budget_mb = (is_assistant || is_dflash) ? (vocab_size > 150000 ? 3500 : 5000) : (vocab_size > 150000 ? 5000 : 6000);
             int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, main_budget_mb);
 
             LOG_INF("   -> FOUND Compatible Drafter: %s\n", drafter_path.c_str());
