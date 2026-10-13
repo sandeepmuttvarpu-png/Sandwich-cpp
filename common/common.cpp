@@ -1405,8 +1405,14 @@ static std::string sandwich_find_compatible_drafter(
             if (cand_arch_id < 0 || gguf_get_kv_type(cand_ctx.get(), cand_arch_id) != GGUF_TYPE_STRING) continue;
             std::string cand_arch = gguf_get_val_str(cand_ctx.get(), cand_arch_id);
 
-            bool is_gemma_family = (target_arch.rfind("gemma", 0) == 0 && cand_arch.rfind("gemma", 0) == 0);
-            bool arch_matches = (cand_arch == target_arch) || is_gemma_family;
+            bool is_same_family = false;
+            for (const char * fam : { "qwen", "llama", "gemma" }) {
+                if (target_arch.rfind(fam, 0) == 0 && cand_arch.rfind(fam, 0) == 0) {
+                    is_same_family = true;
+                    break;
+                }
+            }
+            bool arch_matches = (cand_arch == target_arch) || is_same_family;
             bool is_assistant_head = (cand_arch == target_arch + "-assistant" || cand_arch.find("assistant") != std::string::npos);
 
             if (!arch_matches && !is_assistant_head) {
