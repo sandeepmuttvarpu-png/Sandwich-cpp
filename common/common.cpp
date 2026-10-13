@@ -1412,7 +1412,8 @@ static std::string sandwich_find_compatible_drafter(
                     break;
                 }
             }
-            bool arch_matches = (cand_arch == target_arch) || is_same_family;
+            bool is_dflash_pair = (target_arch.find("muse") != std::string::npos && cand_arch.find("dflash") != std::string::npos);
+            bool arch_matches = (cand_arch == target_arch) || is_same_family || is_dflash_pair;
             bool is_assistant_head = (cand_arch == target_arch + "-assistant" || cand_arch.find("assistant") != std::string::npos);
 
             if (!arch_matches && !is_assistant_head) {
@@ -1643,7 +1644,12 @@ void sandwich_auto_dispatch(common_params & params) {
 
             // Configure Speculative Drafter
             params.speculative.types.clear();
-            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+            auto detected_types = common_speculative_types_from_gguf(drafter_path);
+            if (!detected_types.empty()) {
+                params.speculative.types = detected_types;
+            } else {
+                params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+            }
             params.speculative.draft.mparams.path = drafter_path;
             params.speculative.draft.n_gpu_layers = -1; // 100% in GPU VRAM
             params.speculative.draft.n_max        = 5;
