@@ -142,7 +142,7 @@ if __name__ == "__main__":
         (
             "/home/sandeep/ai-models/dense/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf",
             "Gemma-4-31B-it (Dense)",
-            "Context N-Gram Lookup (n=12, m=48)"
+            "gemma-4-31b-assistant-Q4_0-Q6emb (MTP Drafter, N=5)"
         ),
         (
             "/home/sandeep/ai-models/dense/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf",
