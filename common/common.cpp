@@ -1233,6 +1233,173 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     return info;
 }
 
+static int64_t sandwich_get_kv_i64(const struct gguf_context * ctx, int64_t key_id) {
+    if (key_id < 0) return 0;
+    const enum gguf_type type = gguf_get_kv_type(ctx, key_id);
+    switch (type) {
+        case GGUF_TYPE_UINT8:   return gguf_get_val_u8(ctx, key_id);
+        case GGUF_TYPE_INT8:    return gguf_get_val_i8(ctx, key_id);
+        case GGUF_TYPE_UINT16:  return gguf_get_val_u16(ctx, key_id);
+        case GGUF_TYPE_INT16:   return gguf_get_val_i16(ctx, key_id);
+        case GGUF_TYPE_UINT32:  return gguf_get_val_u32(ctx, key_id);
+        case GGUF_TYPE_INT32:   return gguf_get_val_i32(ctx, key_id);
+        case GGUF_TYPE_UINT64:  return (int64_t) gguf_get_val_u64(ctx, key_id);
+        case GGUF_TYPE_INT64:   return gguf_get_val_i64(ctx, key_id);
+        default:                return 0;
+    }
+}
+
+// Scans the model directory tree to discover a compatible speculative drafter model
+static std::string sandwich_find_compatible_drafter(
+    const std::string & model_path,
+    const std::string & target_arch,
+    size_t target_vocab_size) {
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path main_path = fs::canonical(model_path, ec);
+    if (ec) {
+        main_path = model_path;
+    }
+    fs::path anchor_dir = main_path.parent_path();
+
+    std::vector<fs::path> search_dirs;
+    if (fs::exists(anchor_dir, ec) && fs::is_directory(anchor_dir, ec)) {
+        search_dirs.push_back(anchor_dir);
+    }
+
+    // Also check parent directory if available to catch sibling folders (e.g. drafters/ alongside dense/)
+    fs::path parent_dir = anchor_dir.parent_path();
+    if (!parent_dir.empty() && parent_dir != anchor_dir && fs::exists(parent_dir, ec) && fs::is_directory(parent_dir, ec)) {
+        search_dirs.push_back(parent_dir);
+        // Also check if there is a grandparent (e.g. ~/ai-models) with subfolders
+        fs::path grand_dir = parent_dir.parent_path();
+        if (!grand_dir.empty() && grand_dir != parent_dir && fs::exists(grand_dir, ec) && fs::is_directory(grand_dir, ec)) {
+            for (const auto & entry : fs::directory_iterator(grand_dir, fs::directory_options::skip_permission_denied, ec)) {
+                if (entry.is_directory(ec)) {
+                    std::string fname = entry.path().filename().string();
+                    std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
+                    if (fname.find("draft") != std::string::npos) {
+                        search_dirs.push_back(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
+    std::string best_candidate;
+    uintmax_t best_size = UINT64_MAX;
+    std::unordered_set<std::string> visited_paths;
+
+    for (const auto & sdir : search_dirs) {
+        if (!fs::exists(sdir, ec)) continue;
+
+        for (auto it = fs::recursive_directory_iterator(sdir, fs::directory_options::skip_permission_denied, ec);
+             it != fs::recursive_directory_iterator(); ++it) {
+
+            if (it.depth() > 2) {
+                it.pop();
+                continue;
+            }
+
+            if (!it->is_regular_file(ec)) continue;
+
+            const fs::path & p = it->path();
+            std::string ext = p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext != ".gguf") continue;
+
+            // Skip self
+            if (fs::equivalent(p, main_path, ec)) continue;
+
+            std::string filename = p.filename().string();
+            std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+            if (filename.find("mmproj") != std::string::npos ||
+                filename.find("embed") != std::string::npos ||
+                filename.find("imatrix") != std::string::npos) {
+                continue;
+            }
+
+            std::string full_path = p.string();
+            if (visited_paths.count(full_path)) continue;
+            visited_paths.insert(full_path);
+
+            uintmax_t fsize = fs::file_size(p, ec);
+            if (ec) continue;
+
+            // Drafter models must be between 50 MB and 4.0 GB
+            if (fsize < 50ULL * 1024 * 1024 || fsize > 4ULL * 1024 * 1024 * 1024) {
+                continue;
+            }
+
+            // Inspect GGUF header without loading tensors
+            struct gguf_init_params cand_params = { /* .no_alloc = */ true, /* .ctx = */ nullptr };
+            gguf_context_ptr cand_ctx(gguf_init_from_file(full_path.c_str(), cand_params));
+            if (!cand_ctx) continue;
+
+            // Check architecture
+            int64_t cand_arch_id = gguf_find_key(cand_ctx.get(), "general.architecture");
+            if (cand_arch_id < 0 || gguf_get_kv_type(cand_ctx.get(), cand_arch_id) != GGUF_TYPE_STRING) continue;
+            std::string cand_arch = gguf_get_val_str(cand_ctx.get(), cand_arch_id);
+            if (cand_arch != target_arch) continue;
+
+            // Check vocabulary size
+            int64_t cand_tokens_id = gguf_find_key(cand_ctx.get(), "tokenizer.ggml.tokens");
+            if (cand_tokens_id < 0) continue;
+            size_t cand_vocab = gguf_get_arr_n(cand_ctx.get(), cand_tokens_id);
+            if (cand_vocab != target_vocab_size) continue;
+
+            // Valid matching drafter found!
+            if (fsize < best_size) {
+                best_size = fsize;
+                best_candidate = full_path;
+            }
+        }
+    }
+
+    return best_candidate;
+}
+
+static int32_t sandwich_calculate_optimal_layers(
+    const struct gguf_context * ctx,
+    const std::string & model_path,
+    const std::string & arch,
+    int64_t vram_budget_mb) {
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    std::string key_block_count = arch + ".block_count";
+    int64_t block_id = gguf_find_key(ctx, key_block_count.c_str());
+    int64_t total_blocks = (block_id >= 0) ? sandwich_get_kv_i64(ctx, block_id) : 0;
+    if (total_blocks <= 0) {
+        return 18; // Safe fallback
+    }
+
+    uintmax_t file_bytes = fs::file_size(model_path, ec);
+    if (ec || file_bytes == 0) {
+        return 18;
+    }
+
+    // Reserve headroom for TurboQuant turbo4 KV cache, activations, and display overhead
+    int64_t usable_weight_mb = (vram_budget_mb >= 7000) ? (vram_budget_mb - 700) : (vram_budget_mb - 600);
+    if (usable_weight_mb <= 0) usable_weight_mb = 1000;
+
+    // Average bytes per transformer layer
+    uint64_t approx_layer_bytes = file_bytes / (total_blocks + 1);
+    if (approx_layer_bytes == 0) return 18;
+
+    int64_t allowed_layers = (usable_weight_mb * 1024ULL * 1024ULL) / approx_layer_bytes;
+    if (allowed_layers >= total_blocks) {
+        return -1; // 100% GPU offload
+    }
+    if (allowed_layers <= 0) {
+        return 0;
+    }
+    return (int32_t)allowed_layers;
+}
+
 void sandwich_auto_dispatch(common_params & params) {
     if (!params.sandwich_auto) {
         return;
@@ -1253,50 +1420,40 @@ void sandwich_auto_dispatch(common_params & params) {
         return;
     }
 
-    auto get_kv_i64 = [](const struct gguf_context * ctx, int64_t key_id) -> int64_t {
-        if (key_id < 0) return 0;
-        const enum gguf_type type = gguf_get_kv_type(ctx, key_id);
-        switch (type) {
-            case GGUF_TYPE_UINT8:   return gguf_get_val_u8(ctx, key_id);
-            case GGUF_TYPE_INT8:    return gguf_get_val_i8(ctx, key_id);
-            case GGUF_TYPE_UINT16:  return gguf_get_val_u16(ctx, key_id);
-            case GGUF_TYPE_INT16:   return gguf_get_val_i16(ctx, key_id);
-            case GGUF_TYPE_UINT32:  return gguf_get_val_u32(ctx, key_id);
-            case GGUF_TYPE_INT32:   return gguf_get_val_i32(ctx, key_id);
-            case GGUF_TYPE_UINT64:  return (int64_t) gguf_get_val_u64(ctx, key_id);
-            case GGUF_TYPE_INT64:   return gguf_get_val_i64(ctx, key_id);
-            default:                return 0;
-        }
-    };
-
     int64_t expert_count = 0;
 
     // 1. Direct check for general.expert_count
     int64_t key_expert_count = gguf_find_key(gguf_ctx.get(), "general.expert_count");
     if (key_expert_count >= 0) {
-        expert_count = get_kv_i64(gguf_ctx.get(), key_expert_count);
+        expert_count = sandwich_get_kv_i64(gguf_ctx.get(), key_expert_count);
     }
 
     // 2. Fallback: check architecture specific expert counts
-    if (expert_count == 0) {
-        int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
-        if (arch_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), arch_id) == GGUF_TYPE_STRING) {
-            const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
-            if (!arch.empty()) {
-                const std::string arch_exp_key = arch + ".expert_count";
-                int64_t key_exp = gguf_find_key(gguf_ctx.get(), arch_exp_key.c_str());
-                if (key_exp >= 0) {
-                    expert_count = get_kv_i64(gguf_ctx.get(), key_exp);
-                }
-                if (expert_count == 0) {
-                    const std::string arch_used_key = arch + ".expert_used_count";
-                    int64_t key_used = gguf_find_key(gguf_ctx.get(), arch_used_key.c_str());
-                    if (key_used >= 0) {
-                        expert_count = get_kv_i64(gguf_ctx.get(), key_used);
-                    }
-                }
+    std::string model_arch = "unknown";
+    int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+    if (arch_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), arch_id) == GGUF_TYPE_STRING) {
+        model_arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    }
+
+    if (expert_count == 0 && !model_arch.empty() && model_arch != "unknown") {
+        const std::string arch_exp_key = model_arch + ".expert_count";
+        int64_t key_exp = gguf_find_key(gguf_ctx.get(), arch_exp_key.c_str());
+        if (key_exp >= 0) {
+            expert_count = sandwich_get_kv_i64(gguf_ctx.get(), key_exp);
+        }
+        if (expert_count == 0) {
+            const std::string arch_used_key = model_arch + ".expert_used_count";
+            int64_t key_used = gguf_find_key(gguf_ctx.get(), arch_used_key.c_str());
+            if (key_used >= 0) {
+                expert_count = sandwich_get_kv_i64(gguf_ctx.get(), key_used);
             }
         }
+    }
+
+    size_t vocab_size = 0;
+    int64_t tokens_id = gguf_find_key(gguf_ctx.get(), "tokenizer.ggml.tokens");
+    if (tokens_id >= 0) {
+        vocab_size = gguf_get_arr_n(gguf_ctx.get(), tokens_id);
     }
 
     const bool is_moe = (expert_count > 0);
@@ -1304,8 +1461,9 @@ void sandwich_auto_dispatch(common_params & params) {
     LOG_INF("\n=======================================================\n");
     LOG_INF("🥪 [Project Sandwich] Architecture-Aware Auto-Dispatcher\n");
     LOG_INF("   Model Path:    %s\n", params.model.path.c_str());
-    LOG_INF("   Topology:      %s (experts = %" PRId64 ")\n",
-            is_moe ? "MIXTURE OF EXPERTS (MoE)" : "DENSE TRANSFORMER", expert_count);
+    LOG_INF("   Topology:      %s (arch = %s, experts = %" PRId64 ", vocab = %zu)\n",
+            is_moe ? "MIXTURE OF EXPERTS (MoE)" : "DENSE TRANSFORMER",
+            model_arch.c_str(), expert_count, vocab_size);
 
     if (is_moe) {
         LOG_INF("   -> Policy: MoE Expert Slab Staging Mode\n");
@@ -1319,19 +1477,63 @@ void sandwich_auto_dispatch(common_params & params) {
         params.cache_type_v          = GGML_TYPE_TURBO4_0;
         params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     } else {
-        LOG_INF("   -> Policy: Dense Memory-Constrained Offload Mode\n");
-        LOG_INF("   -> Setting n_gpu_layers = 18, parallel decoding enabled\n");
-        LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
-        params.n_gpu_layers          = 18;
-        params.moe_expert_cache_size = 0;
-        params.parallel_decoding     = true;
-        if (params.n_parallel <= 1) {
-            params.n_parallel = 4;
+        // Dense Model Handling
+        std::string drafter_path = params.speculative.draft.mparams.path;
+        bool drafter_found = !drafter_path.empty();
+
+        if (!drafter_found) {
+            LOG_INF("   -> Scanning model directory tree for compatible speculative drafter...\n");
+            drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size);
+            if (!drafter_path.empty()) {
+                drafter_found = true;
+            }
         }
-        params.cont_batching         = true;
-        params.cache_type_k          = GGML_TYPE_TURBO4_0;
-        params.cache_type_v          = GGML_TYPE_TURBO4_0;
-        params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+
+        if (drafter_found) {
+            // CAPPED VRAM PROFILE: 6.0 GB Cap for Main Model, Drafter 100% in VRAM
+            int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, 6000);
+
+            LOG_INF("   -> FOUND Compatible Drafter: %s\n", drafter_path.c_str());
+            LOG_INF("   -> Policy: Speculative Drafting Mode (Main Model Capped at 6.0 GB VRAM)\n");
+            LOG_INF("   -> Main Model:   n_gpu_layers = %d (allocated within 6.0 GB ceiling)\n", optimal_layers);
+            LOG_INF("   -> Draft Model:  n_gpu_layers = 99 (100%% VRAM offload), n_max = 5\n");
+            LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
+
+            params.n_gpu_layers          = optimal_layers;
+            params.moe_expert_cache_size = 0;
+            params.cache_type_k          = GGML_TYPE_TURBO4_0;
+            params.cache_type_v          = GGML_TYPE_TURBO4_0;
+            params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+
+            // Configure Speculative Drafter
+            params.speculative.types.clear();
+            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+            params.speculative.draft.mparams.path = drafter_path;
+            params.speculative.draft.n_gpu_layers = -1; // 100% in GPU VRAM
+            params.speculative.draft.n_max        = 5;
+            params.speculative.draft.p_min        = 0.75f;
+            params.speculative.draft.cache_type_k = GGML_TYPE_TURBO4_0;
+            params.speculative.draft.cache_type_v = GGML_TYPE_TURBO4_0;
+        } else {
+            // UNCAPPED VRAM PROFILE: 7.2 GB Cap Lifted
+            int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, 7200);
+
+            LOG_INF("   -> No compatible speculative drafter found in model directory tree.\n");
+            LOG_INF("   -> Policy: Dense Memory-Constrained Mode (VRAM Cap LIFTED to 7.2 GB)\n");
+            LOG_INF("   -> Main Model:   n_gpu_layers = %d (maximum GPU layer offload)\n", optimal_layers);
+            LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
+
+            params.n_gpu_layers          = optimal_layers;
+            params.moe_expert_cache_size = 0;
+            params.parallel_decoding     = true;
+            if (params.n_parallel <= 1) {
+                params.n_parallel = 4;
+            }
+            params.cont_batching         = true;
+            params.cache_type_k          = GGML_TYPE_TURBO4_0;
+            params.cache_type_v          = GGML_TYPE_TURBO4_0;
+            params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        }
     }
     LOG_INF("=======================================================\n\n");
 }
