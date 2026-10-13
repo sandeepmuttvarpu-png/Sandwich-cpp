@@ -2369,6 +2369,11 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
     }
 
     const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    if (arch.find("assistant") != std::string::npos || arch == "gemma4-assistant") {
+        SPC_INF("auto-detected speculative type 'draft-mtp' from assistant model '%s'\n", arch.c_str());
+        return { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+    }
+
     if (arch != "dflash") {
         const uint32_t block_count = gguf_get_val_u32(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), (arch + ".block_count").c_str()));
 

@@ -1422,7 +1422,8 @@ static std::string sandwich_find_compatible_drafter(
 
             // Check hidden embedding dimension for assistant heads to avoid tensor multiplication assertions
             if (is_assistant_head && target_embedding_length > 0) {
-                int64_t cand_embd_id = gguf_find_key(cand_ctx.get(), (cand_arch + ".embedding_length").c_str());
+                int64_t cand_embd_out_id = gguf_find_key(cand_ctx.get(), (cand_arch + ".embedding_length_out").c_str());
+                int64_t cand_embd_id = (cand_embd_out_id >= 0) ? cand_embd_out_id : gguf_find_key(cand_ctx.get(), (cand_arch + ".embedding_length").c_str());
                 if (cand_embd_id >= 0) {
                     size_t cand_embd = sandwich_get_kv_i64(cand_ctx.get(), cand_embd_id);
                     if (cand_embd != target_embedding_length) {
@@ -1628,19 +1629,32 @@ void sandwich_auto_dispatch(common_params & params) {
 
         if (drafter_found) {
             // CAPPED VRAM PROFILE: 6.0 GB Cap for Main Model, Drafter 100% in VRAM
-            int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, 6000);
+            // Assistant heads or large-vocab models (>150k) allocate dual gallocr compute graphs; use 5.0 GB to stay under 8GB TGP.
+            bool is_assistant = (drafter_path.find("assistant") != std::string::npos);
+            int64_t main_budget_mb = (is_assistant || vocab_size > 150000) ? 5000 : 6000;
+            int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, main_budget_mb);
 
             LOG_INF("   -> FOUND Compatible Drafter: %s\n", drafter_path.c_str());
-            LOG_INF("   -> Policy: Speculative Drafting Mode (Main Model Capped at 6.0 GB VRAM)\n");
-            LOG_INF("   -> Main Model:   n_gpu_layers = %d (allocated within 6.0 GB ceiling)\n", optimal_layers);
+            LOG_INF("   -> Policy: Speculative Drafting Mode (Main Model Capped at %ld MB VRAM)\n", (long)main_budget_mb);
+            LOG_INF("   -> Main Model:   n_gpu_layers = %d (allocated within %ld MB ceiling)\n", optimal_layers, (long)main_budget_mb);
             LOG_INF("   -> Draft Model:  n_gpu_layers = 99 (100%% VRAM offload), n_max = 5\n");
             LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
 
             params.n_gpu_layers          = optimal_layers;
             params.moe_expert_cache_size = 0;
-            params.cache_type_k          = GGML_TYPE_TURBO4_0;
-            params.cache_type_v          = GGML_TYPE_TURBO4_0;
-            params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            if (is_assistant) {
+                // Assistant models share KV memory (ISWA) with target model; use default F16 KV cache
+                params.cache_type_k = GGML_TYPE_F16;
+                params.cache_type_v = GGML_TYPE_F16;
+                params.speculative.draft.cache_type_k = GGML_TYPE_F16;
+                params.speculative.draft.cache_type_v = GGML_TYPE_F16;
+            } else {
+                params.cache_type_k = GGML_TYPE_TURBO4_0;
+                params.cache_type_v = GGML_TYPE_TURBO4_0;
+                params.speculative.draft.cache_type_k = GGML_TYPE_TURBO4_0;
+                params.speculative.draft.cache_type_v = GGML_TYPE_TURBO4_0;
+            }
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
             // Configure Speculative Drafter
             params.speculative.types.clear();
