@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sandwich.cpp | Local AI Workstation</title>
+  
+  <!-- Custom Sandwich SVG Favicon -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 9C3 6.5 7 4 16 4s13 2.5 13 5c0 1.5-1.5 2.5-4 3H7C4.5 11.5 3 10.5 3 9z' fill='%23d97706'/%3E%3Cpath d='M3 13c1.5.8 3.5 0 5 .8s2.5 1.7 4 .8 3.5-.8 5 0 2.5 1.7 4 .8 3.5-.8 5 0 2.5 1.2 3 .8v2c-.5.4-1.5 0-3-.8s-3.5 0-5 .8-2.5 1.7-4 .8-3.5-.8-5 0-2.5 1.7-4 .8-3.5 0-5-.8v-2z' fill='%2322c55e'/%3E%3Crect x='4' y='17' width='24' height='3' rx='1.5' fill='%23ef4444'/%3E%3Cpath d='M6 20h20l-2 3H8l-2-3z' fill='%23eab308'/%3E%3Cpath d='M3 23c0 2 3.5 5 13 5s13-3 13-5v-1H3v1z' fill='%23b45309'/%3E%3C/svg%3E" type="image/svg+xml">
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Top Navigation Bar -->
+    <header id="top-navbar">
+      <div class="nav-left">
+        <div class="logo">
+          <span class="logo-icon">🥪</span>
+          <span class="logo-title">Sandwich<span class="accent">.cpp</span></span>
+          <span class="version-badge">v3.0</span>
+        </div>
+        <div id="model-indicator" class="status-pill">
+          <span class="status-dot"></span>
+          <span id="active-model-name">Loading model...</span>
+        </div>
+      </div>
+      
+      <div class="nav-right">
+        <button id="hud-toggle-btn" class="nav-btn active" title="Toggle Engine Telemetry HUD">
+          <span class="btn-icon">⚡</span>
+          <span class="btn-text">Telemetry HUD</span>
+        </button>
+        <button id="clear-chat-btn" class="nav-btn" title="Clear Conversation">
+          <span class="btn-icon">🗑️</span>
+          <span class="btn-text">Clear</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Engine Telemetry HUD (Fixed Position Panel) -->
+    <aside id="telemetry-hud" class="hud-panel">
+      <div class="hud-header">
+        <div class="hud-title">
+          <span class="pulse-indicator"></span>
+          <span>Engine Telemetry</span>
+        </div>
+        <span class="hud-tag">HARDWARE ACTIVE</span>
+      </div>
+      
+      <div class="hud-grid">
+        <div class="hud-metric">
+          <div class="metric-label">MoE Cache</div>
+          <div class="metric-value text-accent">4633 MiB (O(1) LRU)</div>
+          <div class="metric-sub">Dynamic VRAM Expert Slab</div>
+        </div>
+        
+        <div class="hud-metric">
+          <div class="metric-label">Speculative Drafter</div>
+          <div class="metric-value text-success">LFM2-8B (214 t/s)</div>
+          <div class="metric-sub">Lossless Recurrent Rollback</div>
+        </div>
+        
+        <div class="hud-metric">
+          <div class="metric-label">KV Compression</div>
+          <div class="metric-value text-warning">TurboQuant 4-Bit</div>
+          <div class="metric-sub">WHT 75% Memory Reduction</div>
+        </div>
+        
+        <div class="hud-metric">
+          <div class="metric-label">Host Offload Engine</div>
+          <div class="metric-value">sandwich.cpp v3.0</div>
+          <div class="metric-sub">AVX2 + AVX-VNNI (Zen4/Raptor)</div>
+        </div>
+      </div>
+
+      <div class="hud-footer">
+        <div class="hud-badge-row">
+          <span class="badge badge-success">MADV_COLD Prefetcher</span>
+          <span class="badge badge-primary">2MB THP Aligned</span>
+          <span class="badge badge-warning">Anti-Pattern Guard</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Container -->
+    <main id="chat-viewport">
+      <div id="chat-history">
+        <!-- Welcome Hero Screen -->
+        <div id="welcome-hero" class="hero-screen">
+          <div class="hero-icon">🥪</div>
+          <h1>Sandwich<span class="accent">.cpp</span> Workstation</h1>
+          <p class="hero-subtitle">High-performance local inference powered by O(1) LRU MoE caching, FlashMLA, and TurboQuant compression.</p>
+          
+          <div class="hero-features">
+            <div class="feature-card">
+              <span class="feat-icon">⚡</span>
+              <h3>Dynamic MoE Caching</h3>
+              <p>Execute 30B–35B MoE architectures locally on consumer 8GB GPUs without PCIe stalls.</p>
+            </div>
+            <div class="feature-card">
+              <span class="feat-icon">🚀</span>
+              <h3>Speculative Decoding</h3>
+              <p>Paired DFlash2, MTP assistant, and small GGUF drafters for up to 3.5× faster generation.</p>
+            </div>
+            <div class="feature-card">
+              <span class="feat-icon">💾</span>
+              <h3>TurboQuant KV</h3>
+              <p>75% smaller KV cache footprint with Walsh-Hadamard transform acceleration.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Typing / Streaming Indicator (Lettuce Green) -->
+      <div id="typing-indicator" class="typing-container hidden">
+        <div class="typing-bubble">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-label">Sandwich Engine generating...</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- Chat Input Area -->
+    <footer id="chat-footer">
+      <!-- Collapsible System Prompt Accordion -->
+      <details id="system-prompt-drawer">
+        <summary>System Prompt Configuration</summary>
+        <div class="drawer-content">
+          <textarea id="system-prompt-input" rows="2" placeholder="You are a helpful, brilliant AI assistant running locally on Sandwich.cpp..."></textarea>
+        </div>
+      </details>
+
+      <form id="chat-form">
+        <div class="input-container">
+          <textarea 
+            id="user-input" 
+            placeholder="Type your message to Sandwich.cpp... (Shift+Enter for newline)"
+            rows="1"
+            autofocus
+          ></textarea>
+          
+          <div class="action-buttons">
+            <button type="button" id="stop-btn" class="control-btn btn-danger hidden" title="Stop Generation">
+              <span class="btn-icon">⏹</span>
+              <span>Stop</span>
+            </button>
+            <button type="submit" id="send-btn" class="control-btn btn-primary" title="Send Message">
+              <span class="btn-icon">➤</span>
+              <span>Send</span>
+            </button>
+          </div>
+        </div>
+        <div class="input-meta">
+          <span>Engine: <strong id="meta-engine-tag">sandwich.cpp v3.0</strong></span>
+          <span class="meta-separator">•</span>
+          <span>SSE Streaming: <strong class="text-success">Active</strong></span>
+          <span class="meta-separator">•</span>
+          <span id="speed-indicator">Ready</span>
+        </div>
+      </form>
+    </footer>
+  </div>
+
+  <script src="chat.js"></script>
+</body>
+</html>

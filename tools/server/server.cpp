@@ -15,6 +15,7 @@
 #include <atomic>
 #include <clocale>
 #include <exception>
+#include <filesystem>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -206,6 +207,15 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     server_tools tools;
 
     std::optional<server_models_routes> models_routes{};
+
+    if (params.public_path.empty()) {
+        std::error_code ec;
+        if (std::filesystem::exists("tools/server/public/index.html", ec)) {
+            params.public_path = "tools/server/public";
+        } else if (std::filesystem::exists("examples/server/public/index.html", ec)) {
+            params.public_path = "examples/server/public";
+        }
+    }
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
