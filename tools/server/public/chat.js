@@ -1,11 +1,16 @@
 /**
- * 🥪 Sandwich.cpp - Web UI & Telemetry Client
+ * 🥪 Sandwich.cpp - Web UI Client
  * Features:
- *  - Sessions Dashboard with Multiple Chat Sessions (Create, Switch, Rename, Delete, Search)
- *  - Vanilla llama.cpp Prompt Input Box with Multimodal File Attachments
- *  - Drag & Drop, Clipboard Image Paste, and Microphone Voice Recording
- *  - Dynamic Model Picker and Reasoning (Thinking) Toggle
- *  - SSE Streaming Chat Engine with Token/sec Telemetry
+ *  - Official Vanilla llama.cpp Dark Neutral Palette
+ *  - Sampling Parameters Drawer (Temperature, Top-P, Min-P, Repetition Penalty, Max Tokens)
+ *  - Per-Message Hover Actions (Copy, Regenerate, Edit, Speak TTS)
+ *  - Code Block Headers with 1-Click Copy
+ *  - Context Window Token Capacity Gauge
+ *  - Multi-Session Dashboard (Create, Switch, Rename, Delete, Search)
+ *  - Multimodal File Attachments (Images, Audio, Text, Docs, Drag & Drop, Paste)
+ *  - Microphone Voice Recording with Live Timer
+ *  - Dynamic Model Picker and Reasoning Toggle
+ *  - High-Speed SSE Streaming Engine
  */
 
 (() => {
@@ -15,11 +20,21 @@
   const STORAGE_SESSIONS_KEY = 'sandwich_sessions_v1';
   const STORAGE_ACTIVE_ID_KEY = 'sandwich_active_session_id';
   const STORAGE_SYSPROMPT_KEY = 'sandwich_system_prompt';
+  const STORAGE_PARAMS_KEY = 'sandwich_sampling_params';
+
+  const DEFAULT_PARAMS = {
+    temperature: 0.70,
+    top_p: 0.90,
+    min_p: 0.05,
+    repetition_penalty: 1.10,
+    max_tokens: 4096
+  };
 
   // --- DOM Elements ---
   // Top Navbar
   const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
   const newChatNavBtn = document.getElementById('new-chat-nav-btn');
+  const paramsToggleBtn = document.getElementById('params-toggle-btn');
   const hudToggleBtn = document.getElementById('hud-toggle-btn');
   const clearChatBtn = document.getElementById('clear-chat-btn');
   const activeModelName = document.getElementById('active-model-name');
@@ -53,6 +68,7 @@
   const selectedModelLabel = document.getElementById('selected-model-label');
   const modelPickerDropdown = document.getElementById('model-picker-dropdown');
   const tokenCounter = document.getElementById('token-counter');
+  const gaugeFill = document.getElementById('gauge-fill');
   const sendBtn = document.getElementById('send-btn');
   const stopBtn = document.getElementById('stop-btn');
   const speedIndicator = document.getElementById('speed-indicator');
@@ -62,7 +78,7 @@
   const fileInputImages = document.getElementById('file-input-images');
   const fileInputAudio = document.getElementById('file-input-audio');
 
-  // Menu items in attachment dropdown
+  // Attachment Menu items
   const menuUploadFiles = document.getElementById('menu-upload-files');
   const menuUploadImages = document.getElementById('menu-upload-images');
   const menuUploadAudio = document.getElementById('menu-upload-audio');
@@ -75,15 +91,33 @@
   const saveSyspromptBtn = document.getElementById('save-sysprompt-btn');
   const resetSyspromptBtn = document.getElementById('reset-sysprompt-btn');
 
+  // Parameters Modal
+  const paramsModal = document.getElementById('params-modal');
+  const closeParamsModal = document.getElementById('close-params-modal');
+  const saveParamsBtn = document.getElementById('save-params-btn');
+  const resetParamsBtn = document.getElementById('reset-params-btn');
+  const paramTemp = document.getElementById('param-temp');
+  const paramTempval = document.getElementById('param-temp-val');
+  const paramTopp = document.getElementById('param-topp');
+  const paramToppVal = document.getElementById('param-topp-val');
+  const paramMinp = document.getElementById('param-minp');
+  const paramMinpVal = document.getElementById('param-minp-val');
+  const paramReppen = document.getElementById('param-reppen');
+  const paramReppenVal = document.getElementById('param-reppen-val');
+  const paramMaxtok = document.getElementById('param-maxtok');
+  const paramMaxtokVal = document.getElementById('param-maxtok-val');
+
   // --- State Variables ---
   let sessions = [];
   let activeSessionId = null;
   let activeModel = 'sandwich-model';
   let availableModels = [];
-  let currentAttachments = []; // Array of { id, name, type, mimeType, size, dataUrl, textContent }
+  let currentAttachments = [];
   let isGenerating = false;
   let abortController = null;
   let isReasoningEnabled = false;
+  let samplingParams = { ...DEFAULT_PARAMS };
+  let maxContextWindow = 8192;
 
   // Audio Recording State
   let mediaRecorder = null;
@@ -93,12 +127,52 @@
 
   // --- Initializer ---
   async function init() {
+    loadSamplingParams();
     loadSessionsFromStorage();
     setupEventListeners();
     await fetchModels();
     renderSessionsList();
     renderCurrentSession();
-    updateTokenCounter();
+    updateContextGauge();
+  }
+
+  // =========================================================================
+  // Sampling Parameters Handling
+  // =========================================================================
+
+  function loadSamplingParams() {
+    try {
+      const stored = localStorage.getItem(STORAGE_PARAMS_KEY);
+      if (stored) {
+        samplingParams = { ...DEFAULT_PARAMS, ...JSON.parse(stored) };
+      }
+    } catch (e) {
+      samplingParams = { ...DEFAULT_PARAMS };
+    }
+    syncParamsModalInputs();
+  }
+
+  function syncParamsModalInputs() {
+    if (!paramTemp) return;
+    paramTemp.value = samplingParams.temperature;
+    paramTempval.textContent = parseFloat(samplingParams.temperature).toFixed(2);
+    paramTopp.value = samplingParams.top_p;
+    paramToppVal.textContent = parseFloat(samplingParams.top_p).toFixed(2);
+    paramMinp.value = samplingParams.min_p;
+    paramMinpVal.textContent = parseFloat(samplingParams.min_p).toFixed(2);
+    paramReppen.value = samplingParams.repetition_penalty;
+    paramReppenVal.textContent = parseFloat(samplingParams.repetition_penalty).toFixed(2);
+    paramMaxtok.value = samplingParams.max_tokens;
+    paramMaxtokVal.textContent = samplingParams.max_tokens;
+  }
+
+  function saveSamplingParamsFromInputs() {
+    samplingParams.temperature = parseFloat(paramTemp.value);
+    samplingParams.top_p = parseFloat(paramTopp.value);
+    samplingParams.min_p = parseFloat(paramMinp.value);
+    samplingParams.repetition_penalty = parseFloat(paramReppen.value);
+    samplingParams.max_tokens = parseInt(paramMaxtok.value, 10);
+    localStorage.setItem(STORAGE_PARAMS_KEY, JSON.stringify(samplingParams));
   }
 
   // =========================================================================
@@ -190,12 +264,11 @@
         sessions = JSON.parse(stored);
       }
     } catch (e) {
-      console.warn('[Sandwich Sessions] Failed to parse stored sessions:', e);
       sessions = [];
     }
 
     if (!Array.isArray(sessions) || sessions.length === 0) {
-      createNewSession('Welcome to Sandwich.cpp');
+      createNewSession('New Conversation');
     } else {
       const savedActiveId = localStorage.getItem(STORAGE_ACTIVE_ID_KEY);
       if (savedActiveId && sessions.some(s => s.id === savedActiveId)) {
@@ -211,7 +284,7 @@
       localStorage.setItem(STORAGE_SESSIONS_KEY, JSON.stringify(sessions));
       localStorage.setItem(STORAGE_ACTIVE_ID_KEY, activeSessionId);
     } catch (e) {
-      console.warn('[Sandwich Sessions] Storage error (quota exceeded):', e);
+      console.warn('[sandwich.cpp] Storage quota error:', e);
     }
   }
 
@@ -229,7 +302,7 @@
       emptyEl.style.textAlign = 'center';
       emptyEl.style.color = 'var(--text-muted)';
       emptyEl.style.fontSize = '0.8rem';
-      emptyEl.textContent = 'No matching sessions';
+      emptyEl.textContent = 'No matching conversations';
       sessionsList.appendChild(emptyEl);
       return;
     }
@@ -258,18 +331,18 @@
 
       const editBtn = document.createElement('button');
       editBtn.className = 'session-action-btn';
-      editBtn.title = 'Rename Session';
+      editBtn.title = 'Rename';
       editBtn.innerHTML = '✏️';
       editBtn.onclick = (e) => {
         e.stopPropagation();
-        const newTitle = prompt('Rename session to:', sess.title);
+        const newTitle = prompt('Rename conversation to:', sess.title);
         if (newTitle !== null) renameSession(sess.id, newTitle);
       };
 
       const delBtn = document.createElement('button');
       delBtn.className = 'session-action-btn delete-btn';
-      delBtn.title = 'Delete Session';
-      delBtn.innerHTML = '🗑️';
+      delBtn.title = 'Delete';
+      delBtn.innerHTML = '✕';
       delBtn.onclick = (e) => deleteSession(sess.id, e);
 
       actions.appendChild(editBtn);
@@ -302,13 +375,15 @@
     const sess = getActiveSession();
     if (!sess || !sess.messages || sess.messages.length === 0) {
       renderWelcomeHero();
+      updateContextGauge();
       return;
     }
 
-    sess.messages.forEach(msg => {
-      appendMessageElement(msg.role, msg.content, msg.attachments);
+    sess.messages.forEach((msg, idx) => {
+      appendMessageElement(msg.role, msg.content, msg.attachments, idx);
     });
     scrollToBottom();
+    updateContextGauge();
   }
 
   function renderWelcomeHero() {
@@ -316,22 +391,24 @@
     hero.id = 'welcome-hero';
     hero.className = 'hero-screen';
     hero.innerHTML = `
-      <div class="hero-icon">🥪</div>
-      <h1>Sandwich<span class="accent">.cpp</span> Workstation</h1>
+      <div class="hero-brand">
+        <h1>sandwich<span class="accent">.cpp</span></h1>
+        <span class="hero-badge">Local Workstation</span>
+      </div>
       <p class="hero-subtitle">High-performance local inference powered by O(1) LRU MoE caching, FlashMLA, and TurboQuant compression.</p>
       <div class="hero-features">
         <div class="feature-card">
-          <span class="feat-icon">⚡</span>
+          <div class="feature-icon">⚡</div>
           <h3>Dynamic MoE Caching</h3>
-          <p>Execute 30B–35B MoE architectures locally on consumer 8GB GPUs without PCIe stalls.</p>
+          <p>Execute 30B–35B MoE architectures locally on consumer GPUs without PCIe stalls.</p>
         </div>
         <div class="feature-card">
-          <span class="feat-icon">🚀</span>
+          <div class="feature-icon">🚀</div>
           <h3>Speculative Decoding</h3>
-          <p>Paired DFlash2, MTP assistant, and small GGUF drafters for up to 3.5× faster generation.</p>
+          <p>Paired recurrent drafters for up to 3.5× accelerated token generation.</p>
         </div>
         <div class="feature-card">
-          <span class="feat-icon">💾</span>
+          <div class="feature-icon">💾</div>
           <h3>TurboQuant KV</h3>
           <p>75% smaller KV cache footprint with Walsh-Hadamard transform acceleration.</p>
         </div>
@@ -341,7 +418,7 @@
   }
 
   // =========================================================================
-  // Vanilla llama.cpp Prompt Input Box & File Attachments
+  // File Attachments & Input Handling
   // =========================================================================
 
   function handleFileSelection(files) {
@@ -384,7 +461,6 @@
         };
         reader.readAsText(file);
       } else {
-        // Generic binary or PDF file
         const reader = new FileReader();
         reader.onload = (e) => {
           attachmentObj.dataUrl = e.target.result;
@@ -396,7 +472,6 @@
       }
     });
 
-    // Reset inputs so same file can be re-selected if removed
     fileInputAll.value = '';
     fileInputImages.value = '';
     fileInputAudio.value = '';
@@ -428,7 +503,6 @@
         chip.appendChild(img);
       } else {
         const iconSpan = document.createElement('span');
-        iconSpan.className = 'chip-icon';
         iconSpan.textContent = att.type === 'audio' ? '🎵' : att.type === 'text' ? '📝' : '📄';
         chip.appendChild(iconSpan);
       }
@@ -453,7 +527,7 @@
       removeBtn.className = 'chip-remove-btn';
       removeBtn.type = 'button';
       removeBtn.innerHTML = '&times;';
-      removeBtn.title = 'Remove attachment';
+      removeBtn.title = 'Remove';
       removeBtn.onclick = () => removeAttachment(att.id);
 
       chip.appendChild(removeBtn);
@@ -472,11 +546,32 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
   }
 
-  function updateTokenCounter() {
+  function updateContextGauge() {
     const text = userInput.value;
-    const chars = text.length;
-    const estTokens = Math.ceil(chars / 4);
-    tokenCounter.textContent = `${chars} chars • ~${estTokens} tok`;
+    const sess = getActiveSession();
+    let totalChars = text.length;
+
+    if (sess && sess.messages) {
+      sess.messages.forEach(m => {
+        if (m.content) totalChars += m.content.length;
+      });
+    }
+
+    const estTokens = Math.ceil(totalChars / 4);
+    tokenCounter.textContent = `${estTokens.toLocaleString()} tk`;
+
+    // Circular gauge stroke percentage
+    const pct = Math.min(100, Math.round((estTokens / maxContextWindow) * 100));
+    gaugeFill.setAttribute('stroke-dasharray', `${pct}, 100`);
+
+    if (pct > 85) {
+      gaugeFill.style.stroke = 'var(--accent-error)';
+    } else if (pct > 65) {
+      gaugeFill.style.stroke = 'var(--accent-warning)';
+    } else {
+      gaugeFill.style.stroke = 'var(--accent-success)';
+    }
+
     updateSubmitButtonState();
   }
 
@@ -487,7 +582,7 @@
   }
 
   // =========================================================================
-  // Audio Voice Recording (Microphone)
+  // Voice Recording (Microphone)
   // =========================================================================
 
   async function toggleAudioRecording() {
@@ -520,7 +615,7 @@
           const fileId = 'att_rec_' + Date.now();
           currentAttachments.push({
             id: fileId,
-            name: `Voice-Recording-${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.webm`,
+            name: `Recording-${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.webm`,
             type: 'audio',
             mimeType: 'audio/webm',
             size: audioBlob.size,
@@ -530,8 +625,6 @@
           renderAttachmentsTray();
         };
         reader.readAsDataURL(audioBlob);
-
-        // Stop all media tracks to release microphone
         stream.getTracks().forEach(track => track.stop());
       };
 
@@ -548,7 +641,6 @@
       }, 500);
 
     } catch (err) {
-      console.error('[Sandwich UI] Microphone access denied or failed:', err);
       alert('Unable to access microphone: ' + err.message);
     }
   }
@@ -583,27 +675,28 @@
           return;
         }
       }
-    } catch (e) {
-      console.warn('[Sandwich UI] /v1/models query failed:', e);
-    }
+    } catch (e) {}
 
     try {
       const respProps = await fetch('/props');
       if (respProps.ok) {
         const props = await respProps.json();
-        if (props.default_generation_settings && props.default_generation_settings.model) {
-          activeModel = props.default_generation_settings.model;
-          availableModels = [activeModel];
-          updateModelLabels(activeModel);
-          renderModelPickerDropdown();
-          return;
+        if (props.default_generation_settings) {
+          if (props.default_generation_settings.model) {
+            activeModel = props.default_generation_settings.model;
+            availableModels = [activeModel];
+          }
+          if (props.default_generation_settings.n_ctx) {
+            maxContextWindow = props.default_generation_settings.n_ctx;
+          }
         }
+        updateModelLabels(activeModel);
+        renderModelPickerDropdown();
+        return;
       }
-    } catch (e) {
-      console.warn('[Sandwich UI] /props query failed:', e);
-    }
+    } catch (e) {}
 
-    activeModel = 'Sandwich.cpp Engine';
+    activeModel = 'sandwich.cpp Engine';
     availableModels = [activeModel];
     updateModelLabels(activeModel);
     renderModelPickerDropdown();
@@ -624,7 +717,7 @@
       item.type = 'button';
       item.className = 'menu-item';
       const short = m.split('/').pop().replace(/\.gguf$/i, '');
-      item.innerHTML = `<span class="menu-icon">${m === activeModel ? '✓' : '•'}</span><span class="menu-text">${short}</span>`;
+      item.innerHTML = `<span>${m === activeModel ? '✓' : '•'}</span><span>${short}</span>`;
       item.onclick = () => {
         activeModel = m;
         updateModelLabels(m);
@@ -642,47 +735,40 @@
     const rawText = userInput.value.trim();
     if ((!rawText && currentAttachments.length === 0) || isGenerating) return;
 
-    // Retrieve active session
     const sess = getActiveSession();
     if (!sess) return;
 
-    // Auto-name session from first message
     if (sess.messages.length === 0) {
       const autoTitle = rawText ? rawText.slice(0, 32) + (rawText.length > 32 ? '...' : '') : 'File Analysis';
       sess.title = autoTitle;
       renderSessionsList();
     }
 
-    // Hide welcome hero if present
     const hero = document.getElementById('welcome-hero');
     if (hero) hero.remove();
 
-    // Prepare message attachments clone
     const messageAttachments = [...currentAttachments];
 
-    // User Message Object
     const userMsg = {
       role: 'user',
       content: rawText,
       attachments: messageAttachments
     };
     sess.messages.push(userMsg);
-    appendMessageElement('user', rawText, messageAttachments);
+    appendMessageElement('user', rawText, messageAttachments, sess.messages.length - 1);
 
-    // Reset Composer
     userInput.value = '';
     userInput.style.height = 'auto';
     currentAttachments = [];
     renderAttachmentsTray();
-    updateTokenCounter();
+    updateContextGauge();
 
-    // Assistant Placeholder Message
     const assistantMsg = {
       role: 'assistant',
       content: ''
     };
     sess.messages.push(assistantMsg);
-    const bubbleEl = appendMessageElement('assistant', '');
+    const bubbleEl = appendMessageElement('assistant', '', [], sess.messages.length - 1);
 
     setGeneratingState(true);
     abortController = new AbortController();
@@ -690,22 +776,16 @@
     const tStart = performance.now();
     let tokenCount = 0;
 
-    // Construct Payload for /v1/chat/completions
     const payloadMessages = [];
-
-    // 1. System Prompt (Session override or global)
     const activeSysPrompt = sess.systemPrompt || localStorage.getItem(STORAGE_SYSPROMPT_KEY);
     if (activeSysPrompt) {
       payloadMessages.push({ role: 'system', content: activeSysPrompt });
     }
 
-    // 2. Prior History (last 8 messages for memory efficiency)
     const prior = sess.messages.slice(0, -2).slice(-8);
     for (const msg of prior) {
       payloadMessages.push(formatPayloadMessage(msg));
     }
-
-    // 3. Current User Message (formatted with attachments)
     payloadMessages.push(formatPayloadMessage(userMsg));
 
     try {
@@ -719,7 +799,11 @@
           model: activeModel,
           messages: payloadMessages,
           stream: true,
-          temperature: 0.7
+          temperature: samplingParams.temperature,
+          top_p: samplingParams.top_p,
+          min_p: samplingParams.min_p,
+          repetition_penalty: samplingParams.repetition_penalty,
+          max_tokens: samplingParams.max_tokens
         }),
         signal: abortController.signal
       });
@@ -761,9 +845,7 @@
                 speedIndicator.textContent = `Streaming: ${tokPerSec} t/s`;
               }
             }
-          } catch (e) {
-            // Partial JSON chunk
-          }
+          } catch (e) {}
         }
       }
 
@@ -775,7 +857,6 @@
       if (err.name === 'AbortError') {
         speedIndicator.textContent = 'Generation stopped by user.';
       } else {
-        console.error('[Sandwich UI] SSE stream error:', err);
         assistantMsg.content += `\n\n*(Error: ${err.message})*`;
         updateBubbleContent(bubbleEl, assistantMsg.content);
         speedIndicator.textContent = `Error: ${err.message}`;
@@ -786,6 +867,7 @@
       renderSessionsList();
       setGeneratingState(false);
       abortController = null;
+      updateContextGauge();
       userInput.focus();
     }
   }
@@ -795,7 +877,6 @@
       return { role: msg.role, content: msg.content };
     }
 
-    // Check for images
     const images = msg.attachments.filter(a => a.type === 'image' && a.dataUrl);
     const textFiles = msg.attachments.filter(a => a.textContent);
 
@@ -824,23 +905,91 @@
   }
 
   // =========================================================================
-  // DOM Message Bubbles Rendering
+  // DOM Message Bubbles Rendering & Message Actions
   // =========================================================================
 
-  function appendMessageElement(role, content, attachments = []) {
+  function appendMessageElement(role, content, attachments = [], msgIndex = -1) {
     const msgEl = document.createElement('div');
     msgEl.className = `chat-message ${role}`;
+    msgEl.dataset.msgIndex = msgIndex;
 
     const header = document.createElement('div');
     header.className = 'message-header';
     header.innerHTML = role === 'user' 
-      ? '<span class="user-badge">● User</span>' 
-      : '<span class="ai-badge">● Sandwich.cpp AI</span>';
+      ? '<span class="user-badge">You</span>' 
+      : '<span class="ai-badge">sandwich.cpp</span>';
+
+    // Floating Per-Message Action Bar on Hover
+    const actionsBar = document.createElement('div');
+    actionsBar.className = 'message-actions-bar';
+
+    // 1. Copy Message Button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-action-btn';
+    copyBtn.title = 'Copy text';
+    copyBtn.innerHTML = '📋';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(content).then(() => {
+        copyBtn.innerHTML = '✓';
+        setTimeout(() => copyBtn.innerHTML = '📋', 1500);
+      });
+    };
+    actionsBar.appendChild(copyBtn);
+
+    // 2. Speak Button (TTS)
+    if ('speechSynthesis' in window) {
+      const speakBtn = document.createElement('button');
+      speakBtn.className = 'msg-action-btn';
+      speakBtn.title = 'Read aloud';
+      speakBtn.innerHTML = '🔊';
+      speakBtn.onclick = () => {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(content);
+        window.speechSynthesis.speak(utterance);
+      };
+      actionsBar.appendChild(speakBtn);
+    }
+
+    // 3. Edit Button (for user messages)
+    if (role === 'user') {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'msg-action-btn';
+      editBtn.title = 'Edit message';
+      editBtn.innerHTML = '✏️';
+      editBtn.onclick = () => {
+        userInput.value = content;
+        userInput.style.height = 'auto';
+        userInput.style.height = Math.max(52, Math.min(userInput.scrollHeight, 300)) + 'px';
+        userInput.focus();
+        updateContextGauge();
+      };
+      actionsBar.appendChild(editBtn);
+    }
+
+    // 4. Regenerate Button (for assistant messages)
+    if (role === 'assistant') {
+      const regenBtn = document.createElement('button');
+      regenBtn.className = 'msg-action-btn';
+      regenBtn.title = 'Regenerate response';
+      regenBtn.innerHTML = '🔄';
+      regenBtn.onclick = () => {
+        const sess = getActiveSession();
+        if (sess && sess.messages.length >= 2) {
+          sess.messages.pop(); // remove assistant
+          const lastUser = sess.messages.pop(); // remove user
+          userInput.value = lastUser.content || '';
+          currentAttachments = lastUser.attachments || [];
+          renderAttachmentsTray();
+          renderCurrentSession();
+          handleSendMessage();
+        }
+      };
+      actionsBar.appendChild(regenBtn);
+    }
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
 
-    // Render attachments if present
     if (attachments && attachments.length > 0) {
       const attsContainer = document.createElement('div');
       attsContainer.className = 'bubble-attachments';
@@ -867,15 +1016,34 @@
     bubble.appendChild(textEl);
 
     msgEl.appendChild(header);
+    msgEl.appendChild(actionsBar);
     msgEl.appendChild(bubble);
     chatHistory.appendChild(msgEl);
     scrollToBottom();
+
+    // Attach copy events to code blocks
+    attachCodeBlockCopyListeners(textEl);
 
     return textEl;
   }
 
   function updateBubbleContent(bubbleTextEl, rawMarkdown) {
     bubbleTextEl.innerHTML = formatMarkdown(rawMarkdown);
+    attachCodeBlockCopyListeners(bubbleTextEl);
+  }
+
+  function attachCodeBlockCopyListeners(container) {
+    container.querySelectorAll('.copy-code-btn').forEach(btn => {
+      btn.onclick = () => {
+        const codeEl = btn.closest('.code-block-wrapper').querySelector('code');
+        if (codeEl) {
+          navigator.clipboard.writeText(codeEl.innerText).then(() => {
+            btn.textContent = '✓ Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 1500);
+          });
+        }
+      };
+    });
   }
 
   function scrollToBottom() {
@@ -895,14 +1063,15 @@
     }
   }
 
-  // Markdown Formatting
+  // Markdown Formatting with Code Block Headers
   function formatMarkdown(text) {
     if (!text) return '';
     let escaped = escapeHtml(text);
 
-    // Code blocks ```code```
+    // Code blocks ```lang\ncode```
     escaped = escaped.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-      return `<pre><code>${code.trim()}</code></pre>`;
+      const language = lang.trim() || 'code';
+      return `<div class="code-block-wrapper"><div class="code-block-header"><span>${language}</span><button type="button" class="copy-code-btn">Copy</button></div><pre><code>${code.trim()}</code></pre></div>`;
     });
 
     // Inline code `code`
@@ -943,7 +1112,6 @@
       sessionsSidebar.classList.toggle('collapsed');
     });
 
-    // Keyboard shortcut Ctrl+B or Cmd+B for sidebar
     window.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
         e.preventDefault();
@@ -966,7 +1134,7 @@
     // 5. Clear Current Chat
     clearChatBtn.addEventListener('click', () => {
       const sess = getActiveSession();
-      if (sess && confirm('Clear messages in this conversation?')) {
+      if (sess && confirm('Clear conversation history?')) {
         sess.messages = [];
         sess.updatedAt = Date.now();
         saveSessionsToStorage();
@@ -980,14 +1148,42 @@
       hudToggleBtn.classList.toggle('active', !isHidden);
     });
 
-    // 7. Auto-Resize Input Textarea & Token Counting
+    // 7. Parameters Modal Toggle
+    paramsToggleBtn.addEventListener('click', () => {
+      syncParamsModalInputs();
+      paramsModal.classList.remove('hidden');
+    });
+
+    closeParamsModal.addEventListener('click', () => paramsModal.classList.add('hidden'));
+    paramsModal.addEventListener('click', (e) => {
+      if (e.target === paramsModal) paramsModal.classList.add('hidden');
+    });
+
+    // Sliders Live Updates
+    paramTemp.addEventListener('input', (e) => paramTempval.textContent = parseFloat(e.target.value).toFixed(2));
+    paramTopp.addEventListener('input', (e) => paramToppVal.textContent = parseFloat(e.target.value).toFixed(2));
+    paramMinp.addEventListener('input', (e) => paramMinpVal.textContent = parseFloat(e.target.value).toFixed(2));
+    paramReppen.addEventListener('input', (e) => paramReppenVal.textContent = parseFloat(e.target.value).toFixed(2));
+    paramMaxtok.addEventListener('input', (e) => paramMaxtokVal.textContent = e.target.value);
+
+    saveParamsBtn.addEventListener('click', () => {
+      saveSamplingParamsFromInputs();
+      paramsModal.classList.add('hidden');
+    });
+
+    resetParamsBtn.addEventListener('click', () => {
+      samplingParams = { ...DEFAULT_PARAMS };
+      syncParamsModalInputs();
+    });
+
+    // 8. Auto-Resize Input Textarea & Token Counting
     userInput.addEventListener('input', () => {
       userInput.style.height = 'auto';
       userInput.style.height = Math.max(52, Math.min(userInput.scrollHeight, 300)) + 'px';
-      updateTokenCounter();
+      updateContextGauge();
     });
 
-    // 8. Keydown Handling: Enter to Send, Shift+Enter for Newline
+    // 9. Keydown Handling: Enter to Send, Shift+Enter for Newline
     userInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -997,13 +1193,13 @@
       }
     });
 
-    // 9. Form Submission
+    // 10. Form Submission
     chatForm.addEventListener('submit', (e) => {
       e.preventDefault();
       handleSendMessage();
     });
 
-    // 10. Stop Generation Button
+    // 11. Stop Generation Button
     stopBtn.addEventListener('click', () => {
       if (abortController) {
         abortController.abort();
@@ -1012,45 +1208,42 @@
       setGeneratingState(false);
     });
 
-    // 11. Add Attachment Menu Toggle
+    // 12. Add Attachment Menu Toggle
     addAttachmentBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       attachmentMenu.classList.toggle('hidden');
     });
 
-    // Close dropdown menus when clicking outside
     document.addEventListener('click', () => {
       attachmentMenu.classList.add('hidden');
       modelPickerDropdown.classList.add('hidden');
     });
 
-    // Dropdown items
     menuUploadFiles.addEventListener('click', () => fileInputAll.click());
     menuUploadImages.addEventListener('click', () => fileInputImages.click());
     menuUploadAudio.addEventListener('click', () => fileInputAudio.click());
     menuSystemPrompt.addEventListener('click', () => openSystemPromptModal());
 
-    // File input changes
     fileInputAll.addEventListener('change', (e) => handleFileSelection(e.target.files));
     fileInputImages.addEventListener('change', (e) => handleFileSelection(e.target.files));
     fileInputAudio.addEventListener('change', (e) => handleFileSelection(e.target.files));
 
-    // 12. Voice Recording Mic Button
+    // 13. Voice Recording Mic Button
     micBtn.addEventListener('click', toggleAudioRecording);
 
-    // 13. Reasoning (Thinking) Toggle
+    // 14. Reasoning (Thinking) Toggle
     reasoningToggleBtn.addEventListener('click', () => {
       isReasoningEnabled = !isReasoningEnabled;
       reasoningToggleBtn.classList.toggle('active', isReasoningEnabled);
     });
 
-    // 14. Model Picker Dropdown
+    // 15. Model Picker Dropdown
     modelPickerBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       modelPickerDropdown.classList.toggle('hidden');
     });
 
-    // 15. Drag & Drop Handling
+    // 16. Drag & Drop Handling
     let dragCounter = 0;
     window.addEventListener('dragenter', (e) => {
       e.preventDefault();
@@ -1080,7 +1273,7 @@
       }
     });
 
-    // 16. Clipboard Paste Handling (Pasting Screenshots/Images)
+    // 17. Clipboard Paste Handling (Screenshots)
     window.addEventListener('paste', (e) => {
       if (e.clipboardData && e.clipboardData.items) {
         const items = e.clipboardData.items;
@@ -1097,7 +1290,7 @@
       }
     });
 
-    // 17. System Prompt Modal Controls
+    // 18. System Prompt Modal Controls
     closeSyspromptModal.addEventListener('click', () => systemPromptModal.classList.add('hidden'));
     systemPromptModal.addEventListener('click', (e) => {
       if (e.target === systemPromptModal) systemPromptModal.classList.add('hidden');
@@ -1126,6 +1319,5 @@
     systemPromptInput.focus();
   }
 
-  // Run initialization on load
   document.addEventListener('DOMContentLoaded', init);
 })();
