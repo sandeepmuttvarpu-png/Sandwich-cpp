@@ -130,14 +130,24 @@ def test_model_acceptance(model_path, model_name, drafter_name):
 if __name__ == "__main__":
     targets = [
         (
+            "/home/sandeep/ai-models/dense/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q6_K.gguf",
+            "Nemotron-3-Nano-4B (Dense)",
+            "Context N-Gram Lookup Speculation (n=12, m=48)"
+        ),
+        (
+            "/home/sandeep/ai-models/dense/dolphin-2.8-mistral-7b-v02-GGUF/dolphin-2.8-mistral-7b-v02-Q4_K_S.gguf",
+            "Dolphin-2.8-Mistral-7B (Dense)",
+            "Context N-Gram Lookup Speculation (n=12, m=48)"
+        ),
+        (
             "/home/sandeep/ai-models/dense/Muse-Glimmer-30B-GGUF/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
             "Muse-Glimmer-30B (Dense)",
             "Muse-Glimmer-30B-DFlash2 (GGUF Drafter, N=5)"
         ),
         (
-            "/home/sandeep/ai-models/dense/Llama-3.3-70B-Instruct-GGUF/Llama-3.3-70B-Instruct-UD-IQ2_XXS.gguf",
-            "Llama-3.3-70B (Dense)",
-            "Llama-3.2-1B-Instruct (GGUF Drafter, N=5)"
+            "/home/sandeep/ai-models/dense/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf",
+            "Qwen3.8-27B (Dense)",
+            "Qwen3.8-27B-DFlash2-Q4_K_M (DFlash2 Drafter, N=5)"
         ),
         (
             "/home/sandeep/ai-models/dense/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf",
@@ -145,9 +155,9 @@ if __name__ == "__main__":
             "gemma-4-31b-assistant-Q4_0-Q6emb (MTP Drafter, N=5)"
         ),
         (
-            "/home/sandeep/ai-models/dense/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf",
-            "Qwen3.8-27B (Dense)",
-            "Qwen3.8-27B-DFlash2-Q4_K_M (DFlash2 Drafter, N=5)"
+            "/home/sandeep/ai-models/dense/Llama-3.3-70B-Instruct-GGUF/Llama-3.3-70B-Instruct-UD-IQ2_XXS.gguf",
+            "Llama-3.3-70B (Dense)",
+            "Llama-3.2-1B-Instruct (GGUF Drafter, N=5)"
         )
     ]
 
