@@ -983,7 +983,7 @@
     // 7. Auto-Resize Input Textarea & Token Counting
     userInput.addEventListener('input', () => {
       userInput.style.height = 'auto';
-      userInput.style.height = Math.min(userInput.scrollHeight, 180) + 'px';
+      userInput.style.height = Math.max(52, Math.min(userInput.scrollHeight, 300)) + 'px';
       updateTokenCounter();
     });
 
