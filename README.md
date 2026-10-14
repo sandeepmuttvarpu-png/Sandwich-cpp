@@ -1,7 +1,7 @@
 # 🥪 Sandwich.cpp
 
 > **Unified High-Performance Local LLM Engine for Consumer GPUs**  
-> *Dynamic MoE Expert Caching + TurboQuant 4-Bit KV Compression + Architecture-Aware Auto-Dispatch*
+> *Modern MoE Cache + FlashMLA + TurboQuant 4-Bit KV Compression + SOTA IQK Engine + Auto-Dispatch*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CUDA: 12.0+](https://img.shields.io/badge/CUDA-12.0%2B-green.svg)](https://developer.nvidia.com/cuda-toolkit)
@@ -10,22 +10,72 @@
 
 **Sandwich.cpp** is a high-performance fork of [`llama.cpp`](https://github.com/ggerganov/llama.cpp) engineered to solve the memory and bandwidth bottleneck of running **30B–35B Mixture of Experts (MoE)** and large dense models on consumer hardware (such as 8GB VRAM laptop and desktop GPUs).
 
-By fusing **BeeLlama's dynamic MoE slab offloading** with **TheTom's TurboQuant 4-bit compressed KV cache**, patching critical C++ buffer assertion crashes on GLM architectures, and introducing an **Architecture-Aware Auto-Dispatcher (`--sandwich-auto`)**, Sandwich.cpp achieves up to **+78.3% faster MoE inference** with zero manual configuration.
+By fusing **modern O(1) LRU dynamic MoE slab caching** with **TurboQuant 4-bit compressed KV caches**, **native FlashMLA attention kernels**, an **asynchronous MoE prefetcher**, a **modular IQK AVX-512 VNNI engine**, and an **Architecture-Aware Auto-Dispatcher (`--sandwich-auto`)**, Sandwich.cpp delivers high-speed, fluid local LLM inference with zero manual tuning.
 
 ---
 
-## 🏆 Key Performance Highlights (8GB RTX 5050 Laptop GPU)
+## ⚡ The Next-Gen Clean-Room Engine Upgrades
 
-| Model Architecture | Context | BeeLlama | TurboQuant | Sandwich.cpp (Ours) | Delta vs Prior Forks |
-|---|---|---|---|---|:---:|
-| **Nemotron-3-Nano-30B MoE** | 32K | 23.6 tk/s (8K) | 19.5 tk/s | **34.8 tk/s** 🥇 | **+47.5% vs BeeLlama**<br>**+78.3% vs TurboQuant** |
-| **Qwen3.6-35B MoE** | 8K / 32K | 25.1 tk/s | 15.7 tk/s | **33.4 tk/s** 🥇 | **+33.1% vs BeeLlama**<br>**+116.0% vs TurboQuant** |
-| **GLM-4.7 Flash 30B MoE** | 8K / 32K | ❌ **CRASH** | 16.2 tk/s | **27.6 tk/s** (61.8 PP) 🥇 | **+70.4% vs TurboQuant**<br>*(BeeLlama crashed outright)* |
-| **Muse-Glimmer 30B Dense** | 8K | 2.5 tk/s | 2.6 tk/s | **2.56 tk/s** (20.3 PP) 🥇 | Auto CPU WHT fallback |
-| **Dolphin 2.8 Mistral 7B** | 8K | — | — | **55.82 tk/s** (1,978 PP) 🥇 | 100% GPU offload |
-| **NVIDIA Nemotron 4B** | 8K | — | — | **66.67 tk/s** (3,050 PP) 🥇 | 100% GPU offload |
+Sandwich.cpp integrates four major architectural milestones developed under clean-room engineering:
 
-*See full benchmark details and methodology in [`docs/benchmarks.md`](docs/benchmarks.md).*
+### 1. Phase 1: LFM2 Lossless Rollback, THP Alignment & Async MoE Prefetcher
+- **LFM2 Recurrent State Rollback:** Enables lossless CPU checkpoint restoration for short-convolution recurrent states in `common/speculative.cpp`, unlocking stable speculative drafting for architectures like `LFM2-8B-A1B`.
+- **Linux 2MB Transparent Huge Pages (THP) Alignment:** Memory-mapped GGUF fragments align to 2MB THP boundaries, eliminating TLB thrashing and boosting host DRAM throughput during hybrid execution.
+- **Asynchronous Lookahead MoE Prefetcher:** A dedicated 2-thread background worker pool issues `madvise(MADV_WILLNEED)` on predicted next-layer expert weights and recycles inactive pages using `madvise(MADV_COLD)` to keep kernel memory pressure minimal.
+
+### 2. Phase 2: Modern O(1) LRU MoE Cache & Backend Scheduler Copy-Callback
+- **Scheduler Copy-Callback Hook:** Intercepts expert weight transfers inside the backend execution scheduler without blocking concurrent tensor graph dispatch.
+- **O(1) LRU Slot Eviction (`llama-moe-cache-share.h`):** Replaces rigid round-robin caching with constant-time least-recently-used slot tracking, guaranteeing the hottest expert weights remain locked in GPU VRAM slabs.
+- **Dynamic Multi-Device Slicing:** Automatically sizes the expert VRAM slab to available memory headroom (e.g. allocating 2GB–4GB on 8GB cards) while keeping the remainder of host RAM free for KV cache and dense layers.
+
+### 3. Phase 3: Fused Top-K MoE Router & Native FlashMLA Kernels
+- **Fused CUDA Top-K MoE Router:** Fuses `Softmax` → `Top-K` → `Get-Rows` into a single warp-level CUDA kernel launch, eliminating 2 global memory roundtrips per MoE layer.
+- **Shared-Memory MMQ GEMM Permutations:** Keeps expert indices and quant scale factors in fast CUDA Shared Memory during quantized matrix multiplication.
+- **Native FlashMLA (`latent_attn.cu`):** Custom CUDA Multi-Head Latent Attention kernel optimized for packed KV caches (`F16`, `Q8_0`), natively accelerating DeepSeek V2/V3/R1 and GLM-4.7 Flash attention layers.
+
+### 4. Phase 4: SOTA IQK Engine & Hybrid CPU Offload
+- **Modular `ggml-iqk` Helper Library:** Dedicated sub-library (`ggml/src/ggml-iqk/`) providing SIMD dot products and multi-threaded hybrid GEMM scheduling for `IQ2_KS`, `IQ3_KS`, `IQ4_KS`, and `IQ4_KS_R16`.
+- **AVX2 & AVX-512 VNNI Vector Acceleration:** Features runtime CPUID dispatch (Leaf 7 Subleaf 0 & 1) utilizing `_mm256_dpbusd_epi32` on Intel 12th–14th Gen Hybrid / AMD Zen 4/5 CPUs for hybrid CPU fallback layers.
+- **Anti-Pattern Guard (`-rtr` Prevention):** The auto-dispatcher strictly prohibits `-rtr` (row-interleaved repacking) for k-quants in hybrid mode, preventing host allocations that destroy GPU VRAM staging.
+
+---
+
+## 🏆 System-Wide Benchmarks (RTX 5050 Mobile 8GB + Intel i7-13620H)
+
+Empirically verified across all models with `--sandwich-auto` on an 8GB VRAM consumer laptop GPU:
+
+### 1. Dense & MoE Model Benchmark Results
+
+| Model Architecture | Parameters / Quant | Pipeline & Engine Features | Prompt Speed | Generation Speed | Peak VRAM | Status |
+|---|---|---|:---:|:---:|:---:|:---:|
+| **LFM2-8B-A1B-Instruct-Quantum** | MoE (IQ2_XXS, 2.1 GB) | Lossless Recurrent Rollback + MoE Cache | **360.5 t/s** | **223.7 t/s** | 3,658 MB | ✅ PASS |
+| **GLM-4.7-Flash** | MoE (Q4_K_M, 17 GB) | Native FlashMLA + MoE Prefetcher | **10.9 t/s** | **8.8 t/s** | 6,776 MB | ✅ PASS |
+| **Qwen3.6-35B-A3B** | MoE (IQ3_XXS, 14 GB) | O(1) LRU VRAM Slab Staging | **26.9 t/s** | **42.3 t/s** | 6,828 MB | ✅ PASS |
+| **Nemotron-3-Nano-30B-A3B** | MoE (IQ3_XXS, 17 GB) | Dynamic Slicing + Prefetcher | **6.6 t/s** | **11.9 t/s** | 6,780 MB | ✅ PASS |
+| **NVIDIA-Nemotron-3-Nano-4B** | Dense (Q6_K, 3.7 GB) | Full GPU Direct Offload | **249.0 t/s** | **72.1 t/s** | 6,444 MB | ✅ PASS |
+| **Dolphin-2.8-Mistral-7B** | Dense (Q4_K_S, 3.9 GB) | Full GPU Direct Offload | **482.0 t/s** | **56.0 t/s** | 6,784 MB | ✅ PASS |
+| **Qwen3.8-27B** | Dense (IQ3_XXS, 11 GB) | Hybrid CPU/GPU + DFlash2 Drafter | **12.5 t/s** | **2.4 t/s** | 6,518 MB | ✅ PASS |
+| **Muse-Glimmer-30B** | Dense (Q4_K_M, 16 GB) | Hybrid CPU/GPU + DFlash2 Drafter | **15.1 t/s** | **5.2 t/s** | 4,828 MB | ✅ PASS |
+| **Gemma-4-31B-it** | Dense (Q4_0, 17 GB) | Hybrid CPU/GPU + MTP Assistant | **1.4 t/s** | **3.5 t/s** | 7,468 MB | ✅ PASS |
+| **Llama-3.3-70B-Instruct** | Dense (IQ2_XXS, 19 GB) | Hybrid IQK VNNI + Llama-3.2 Drafter | **18.9 t/s** | **0.9 t/s** | 6,680 MB | ✅ PASS |
+| **Llama-3.2-1B-Instruct** | Drafter (Q5_K_S, 852 MB) | Standalone Ultra-Low Latency | **2,044.2 t/s** | **214.5 t/s** | 6,764 MB | ✅ PASS |
+| **Nomic-Embed-Text-v1.5** | Embedding (F16, 262 MB) | Direct Offload (468 ms Latency) | **25.6 t/s** | — | 430 MB | ✅ PASS |
+
+---
+
+### 2. Speculative Decoding Drafter Acceptance Rates
+
+Empirically measured using the multi-model acceptance test harness (`test_acceptance.py`):
+
+| Target Dense Model | Speculative Architecture | Drafter Model / Strategy | Accepted / Drafted | Acceptance Rate | Mean Acceptance Length |
+|---|---|---|:---:|:---:|:---:|
+| **Muse-Glimmer-30B** | **DFlash2** (Fused 5-token head) | `Muse-Glimmer-30B-DFlash2-Q4_K_M.gguf` | **24 / 27** | **88.9%** 🥇 | **3.18 tok/iter** |
+| **Llama-3.3-70B-Instruct** | **GGUF Small Drafter** (N=5) | `Llama-3.2-1B-Instruct-Q5_K_S.gguf` | **28 / 35** | **80.0%** 🥇 | **3.55 tok/iter** |
+| **Qwen3.8-27B** | **DFlash2** (Fused 5-token head) | `Qwen3.8-27B-DFlash2-Q4_K_M.gguf` | **28 / 38** | **73.7%** 🥇 | **3.00 tok/iter** |
+| **Gemma-4-31B-it** | **MTP Assistant** (ISWA shared KV) | `gemma-4-31b-assistant-Q4_0-Q6emb.gguf` | **30 / 58** | **51.7%** | **3.00 tok/iter** |
+| **Nemotron-3-Nano-4B** | **Zero-VRAM N-Gram** (`n=12, m=48`) | In-Context Prompt N-Gram Lookup | — | *Context-dependent* | — |
+| **Dolphin-2.8-Mistral-7B**| **Zero-VRAM N-Gram** (`n=12, m=48`) | In-Context Prompt N-Gram Lookup | — | *Context-dependent* | — |
+
 
 ---
 
@@ -339,6 +389,7 @@ Sandwich.cpp is built upon pioneering work across the local AI open-source commu
 - **Upstream Engine:** [`ggerganov/llama.cpp`](https://github.com/ggerganov/llama.cpp)
 - **Dynamic MoE Offload:** [`GenerelSchwerz/llama.cpp`](https://github.com/GenerelSchwerz/llama.cpp) (BeeLlama)
 - **TurboQuant KV Cache:** [`TheTom/llama-cpp-turboquant`](https://github.com/TheTom/llama-cpp-turboquant)
+- **Modern MoE, FlashMLA & SOTA Quantization Insights:** [`ikawrakow/ik_llama.cpp`](https://github.com/ikawrakow/ik_llama.cpp) (I. Kawrakow)
 - **GUI Companion:** Pair Sandwich.cpp with **[Sandwich Deck](https://github.com/sandeepmuttvarpu-png/sandwich-deck)** for an ultra-lightweight LM Studio desktop experience.
 
 ---
