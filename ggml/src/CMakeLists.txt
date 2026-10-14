@@ -207,6 +207,8 @@ add_library(ggml-base
             ggml-quants.c
             ggml-quants.h
             ggml-turbo-quant.c
+            ../include/ggml-moe-prefetch.h
+            ggml-moe-prefetch.cpp
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
@@ -485,7 +487,10 @@ function(ggml_add_cpu_backend_variant tag_name)
     ggml_add_cpu_backend_variant_impl(${tag_name})
 endfunction()
 
+add_subdirectory(ggml-iqk)
+
 ggml_add_backend(CPU)
+target_link_libraries(ggml PUBLIC ggml-iqk)
 
 if (GGML_CPU_ALL_VARIANTS)
     if (NOT GGML_BACKEND_DL)

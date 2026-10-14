@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 
 #include "ggml.h"
+#include "ggml-moe-prefetch.h"
 
 #include <cstring>
 #include <climits>
@@ -492,10 +493,26 @@ struct llama_mmap::impl {
         // MAP_POPULATE would fault in the lazy ranges too
         if (prefetch && lazy_ranges.empty()) { flags |= MAP_POPULATE; }
 #endif
+#ifdef __linux__
+        // Transparent Huge Page (THP) alignment (2 MiB standard on Linux x86_64)
+        // Backing mapping with huge pages slashes TLB misses by 512x and guarantees munmap length is hugepage-aligned
+        const size_t thp_page_size = 2 * 1024 * 1024;
+        const size_t aligned_size = thp_page_size * ((file->size() + thp_page_size - 1) / thp_page_size);
+        addr = mmap(NULL, aligned_size, PROT_READ, flags, fd, 0);
+#else
+        const size_t aligned_size = file->size();
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
+#endif
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
+
+#ifdef __linux__
+#ifdef MADV_HUGEPAGE
+        madvise(addr, aligned_size, MADV_HUGEPAGE);
+#endif
+#endif
+        ggml_moe_prefetch_register_mapping(addr, aligned_size);
 
         // page-aligned madvise over [beg, end), clamped to the file
         auto advise = [&](size_t beg, size_t end, int advice, const char * name) {
@@ -525,7 +542,7 @@ struct llama_mmap::impl {
             }
         }
 
-        mapped_fragments.emplace_back(0, file->size());
+        mapped_fragments.emplace_back(0, aligned_size);
     }
 
     static void align_range(size_t * first, size_t * last, size_t page_size) {
@@ -577,6 +594,7 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
+        ggml_moe_prefetch_unregister_mapping(addr);
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));

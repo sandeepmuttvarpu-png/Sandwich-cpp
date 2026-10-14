@@ -1109,6 +1109,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    "LATENT_ATTN",
 
     "UNARY",
 
@@ -1126,7 +1127,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1225,6 +1226,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
+    "latent_attn(q, cache, pk, pv, mask, indices)",
 
     "unary(x)",
 
@@ -1242,7 +1244,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6674,6 +6676,127 @@ struct ggml_tensor * ggml_dsv4_hc_post(
     result->src[3] = comb;
 
     return result;
+}
+
+static struct ggml_tensor * ggml_latent_attn_ext_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * cache,
+        struct ggml_tensor  * prefix_k,
+        struct ggml_tensor  * prefix_v,
+        struct ggml_tensor  * mask,
+        struct ggml_tensor  * indices,
+        int                   dv,
+        int                   dv_off,
+        float                 scale,
+        float                 max_bias,
+        int                   mode) {
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(q->ne[0] == cache->ne[0]);
+    GGML_ASSERT(q->ne[3] == 1);
+    GGML_ASSERT(cache->ne[2] == 1 && cache->ne[3] == 1);
+    GGML_ASSERT(dv > 0 && dv_off >= 0 && (int64_t) dv_off + dv <= cache->ne[0]);
+    GGML_ASSERT(max_bias == 0.0f && "ggml_latent_attn: ALiBi not implemented");
+    GGML_ASSERT(cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16 ||
+                cache->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(mode == 0 || mode == 1);
+    GGML_ASSERT((indices != NULL) == (mode == 1));
+
+    GGML_ASSERT((prefix_k == NULL) == (prefix_v == NULL));
+    if (prefix_k) {
+        GGML_ASSERT(prefix_k->ne[0] == cache->ne[0]);
+        GGML_ASSERT(prefix_v->ne[0] == prefix_k->ne[1]);
+        GGML_ASSERT(prefix_v->ne[1] == dv);
+        GGML_ASSERT(ggml_is_contiguous(prefix_k));
+        GGML_ASSERT(ggml_is_contiguous(prefix_v));
+        GGML_ASSERT(prefix_k->type == GGML_TYPE_F32 || prefix_k->type == GGML_TYPE_F16);
+        GGML_ASSERT(prefix_v->type == GGML_TYPE_F32 || prefix_v->type == GGML_TYPE_F16);
+        GGML_ASSERT(prefix_k->ne[2] == 1 && prefix_k->ne[3] == 1);
+        GGML_ASSERT(prefix_v->ne[2] == 1 && prefix_v->ne[3] == 1);
+    }
+
+    if (mask) {
+        GGML_ASSERT(mask->type == GGML_TYPE_F32);
+        GGML_ASSERT(mask->nb[0] == sizeof(float));
+        GGML_ASSERT(mask->nb[1] % sizeof(float) == 0 &&
+                    "ggml_latent_attn: mask row stride must be a whole number of floats");
+        GGML_ASSERT(mask->ne[0] == cache->ne[1]);
+        GGML_ASSERT(mask->ne[1] >= q->ne[1]);
+        GGML_ASSERT(mask->ne[2] == 1 && mask->ne[3] == 1);
+    }
+
+    if (indices) {
+        GGML_ASSERT(indices->type == GGML_TYPE_I32);
+        GGML_ASSERT(indices->ne[0] >= 1);
+        GGML_ASSERT(indices->ne[1] >= q->ne[1]);
+        GGML_ASSERT(ggml_is_contiguous(indices));
+        GGML_ASSERT(indices->ne[2] == 1 && indices->ne[3] == 1);
+    }
+
+    if (ggml_is_quantized(cache->type)) {
+        const int64_t blk = ggml_blck_size(cache->type);
+        GGML_ASSERT(cache->ne[0] % blk == 0);
+        GGML_ASSERT(dv     % blk == 0);
+        GGML_ASSERT(dv_off % blk == 0);
+        GGML_ASSERT(cache->nb[1] == ggml_row_size(cache->type, cache->ne[0]) &&
+                    "ggml_latent_attn: quantized cache rows must be packed");
+    }
+
+    if (cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16) {
+        GGML_ASSERT(cache->nb[0] == ggml_type_size(cache->type) &&
+                    "ggml_latent_attn: cache inner dimension must be packed");
+    }
+
+    int64_t ne[4] = { dv, q->ne[1], q->ne[2], 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    ggml_set_op_params_f32(result, 0, scale);
+    ggml_set_op_params_f32(result, 1, max_bias);
+    ggml_set_op_params_i32(result, 2, dv);
+    ggml_set_op_params_i32(result, 3, dv_off);
+    ggml_set_op_params_i32(result, 4, mode);
+
+    result->op     = GGML_OP_LATENT_ATTN;
+    result->src[0] = q;
+    result->src[1] = cache;
+    result->src[2] = prefix_k;
+    result->src[3] = prefix_v;
+    result->src[4] = mask;
+    result->src[5] = indices;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_latent_attn_prefix_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * cache,
+        struct ggml_tensor  * prefix_k,
+        struct ggml_tensor  * prefix_v,
+        struct ggml_tensor  * mask,
+        int                   dv,
+        int                   dv_off,
+        float                 scale,
+        float                 max_bias) {
+    return ggml_latent_attn_ext_impl(ctx, q, cache, prefix_k, prefix_v, mask, NULL,
+            dv, dv_off, scale, max_bias, 0);
+}
+
+struct ggml_tensor * ggml_latent_attn_indexed_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * cache,
+        struct ggml_tensor  * prefix_k,
+        struct ggml_tensor  * prefix_v,
+        struct ggml_tensor  * mask,
+        struct ggml_tensor  * indices,
+        int                   dv,
+        int                   dv_off,
+        float                 scale,
+        float                 max_bias) {
+    return ggml_latent_attn_ext_impl(ctx, q, cache, prefix_k, prefix_v, mask, indices,
+            dv, dv_off, scale, max_bias, 1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

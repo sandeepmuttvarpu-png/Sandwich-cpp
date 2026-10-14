@@ -10,6 +10,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
+#include "ggml-moe-prefetch.h"
 #include "llama-ext.h"
 #include "llama-sampler.h"
 #include "llama.h"
@@ -2122,6 +2123,17 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
 
+    if (n_tokens_all > 1 && ggml_moe_prefetch_enabled()) {
+        // Post-prompt cold sweep: advise Linux kernel to mark streaming prompt pages cold,
+        // preventing prompt traffic from evicting active generation working set
+        for (const auto & layer : model.layers) {
+            if (layer.ffn_up_exps)      ggml_moe_prefetch_cold(layer.ffn_up_exps);
+            if (layer.ffn_down_exps)    ggml_moe_prefetch_cold(layer.ffn_down_exps);
+            if (layer.ffn_gate_exps)    ggml_moe_prefetch_cold(layer.ffn_gate_exps);
+            if (layer.ffn_gate_up_exps) ggml_moe_prefetch_cold(layer.ffn_gate_up_exps);
+        }
+    }
+
     return 0;
 }
 
@@ -2628,6 +2640,8 @@ ggml_status llama_context::graph_compute(
 
     copy_experts.reset();
 
+    ggml_moe_prefetch_new_epoch();
+
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
@@ -2656,6 +2670,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     if (node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
         return false;
     }
+
+    // Asynchronously prefetch selected experts prior to kernel execution
+    ggml_moe_prefetch_node(node);
 
     const ggml_tensor * ids = node->src[2];
     if (ggml_nelements(ids) == 0) {

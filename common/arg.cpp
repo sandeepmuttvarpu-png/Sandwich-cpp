@@ -2428,9 +2428,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
-        {"--repack"},
+        {"-rtr", "--run-time-repack", "--repack"},
         {"-nr", "--no-repack"},
-        string_format("whether to enable weight repacking (default: %s)", params.no_extra_bufts ? "disabled" : "enabled"),
+        string_format("whether to enable weight repacking (default: %s). CAUTION: -rtr must NOT be used for k-quants in hybrid mode!", params.no_extra_bufts ? "disabled" : "enabled"),
         [](common_params & params, bool value) {
             params.no_extra_bufts = !value;
         }

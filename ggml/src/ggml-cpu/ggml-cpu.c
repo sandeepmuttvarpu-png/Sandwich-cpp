@@ -2138,6 +2138,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_dsv4_hc_post(params, tensor);
             } break;
+        case GGML_OP_LATENT_ATTN:
+            {
+                ggml_compute_forward_latent_attn(params, tensor);
+            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2321,6 +2325,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_DSV4_HC_COMB:
         case GGML_OP_DSV4_HC_PRE:
         case GGML_OP_DSV4_HC_POST:
+        case GGML_OP_LATENT_ATTN:
             {
                 n_tasks = n_threads;
             } break;
@@ -3076,6 +3081,15 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_TURBO_WHT:
                     {
                         cur = 0;
+                    } break;
+                case GGML_OP_LATENT_ATTN:
+                    {
+                        const int64_t Dk = node->src[1]->ne[0];
+                        const int64_t N  = node->src[1]->ne[1];
+                        const int64_t P  = node->src[2] ? node->src[2]->ne[1] : 0;
+                        const int mode   = node->op_params[4];
+                        const int64_t rows = mode == 0 ? N : (node->src[5] ? node->src[5]->ne[0] : 0);
+                        cur = sizeof(float)*(P + rows + Dk)*n_tasks;
                     } break;
                 default:
                     break;
