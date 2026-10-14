@@ -228,6 +228,10 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
     std::vector<common_params_sampling> smpls_cfg;
 
+    // LFM2 / recurrent state checkpoints for lossless speculative rollback
+    bool is_recurrent_dft = false;
+    std::vector<std::vector<std::vector<uint8_t>>> draft_recurrent_states;
+
     common_speculative_impl_draft_simple(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, n_seq, params.draft.n_max)
         , params(params.draft)
@@ -237,6 +241,14 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
         if (!ctx_dft) {
             throw std::runtime_error("draft-simple requires a draft context");
+        }
+
+        // Detect if draft model uses recurrent memory (e.g. LFM2, LFM2-MoE, Mamba, RWKV) where partial seq_rm is unsupported
+        const auto * model_dft = llama_get_model(ctx_dft);
+        if (model_dft && (llama_model_is_recurrent(model_dft) || llama_model_is_hybrid(model_dft))) {
+            is_recurrent_dft = true;
+            draft_recurrent_states.resize(n_seq);
+            SPC_INF("%s", "sandwich: draft model has recurrent state, enabling lossless CPU checkpoint rollback\n");
         }
 
         zeros.assign(llama_model_n_embd_inp(llama_get_model(ctx_dft)), 0.0f);
@@ -352,6 +364,23 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
         batch.clear();
 
+        // For recurrent drafters, capture step 0 (baseline state before this draft cycle)
+        if (is_recurrent_dft) {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (!dparams[seq_id].drafting) {
+                    continue;
+                }
+                auto & seq_states = draft_recurrent_states[seq_id];
+                seq_states.clear();
+                const size_t s_sz = llama_state_seq_get_size_ext(ctx_dft, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                std::vector<uint8_t> s_buf(s_sz);
+                const size_t n_read = llama_state_seq_get_data_ext(ctx_dft, s_buf.data(), s_sz, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                if (n_read == s_sz) {
+                    seq_states.push_back(std::move(s_buf));
+                }
+            }
+        }
+
         // keep track of which sequences are still drafting
         int n_drafting = 0;
         std::vector<bool> drafting(n_seq);
@@ -457,6 +486,22 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
                 break;
             }
 
+            // For recurrent drafters, snapshot the state after this draft token
+            if (is_recurrent_dft) {
+                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                    if (!drafting[seq_id]) {
+                        continue;
+                    }
+                    auto & seq_states = draft_recurrent_states[seq_id];
+                    const size_t s_sz = llama_state_seq_get_size_ext(ctx_dft, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    std::vector<uint8_t> s_buf(s_sz);
+                    const size_t n_read = llama_state_seq_get_data_ext(ctx_dft, s_buf.data(), s_sz, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    if (n_read == s_sz) {
+                        seq_states.push_back(std::move(s_buf));
+                    }
+                }
+            }
+
             ++i;
         }
 
@@ -471,8 +516,26 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
-        // noop
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+        if (!is_recurrent_dft || seq_id >= (llama_seq_id) draft_recurrent_states.size()) {
+            return;
+        }
+
+        auto & seq_states = draft_recurrent_states[seq_id];
+        if (seq_states.empty()) {
+            return;
+        }
+
+        // Restore drafter recurrent state to step n_accepted (step 0 = baseline before drafting)
+        if (n_accepted < seq_states.size()) {
+            const auto & target_state = seq_states[n_accepted];
+            if (!target_state.empty()) {
+                llama_state_seq_set_data_ext(params.ctx_dft, target_state.data(), target_state.size(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                SPC_DBG("sandwich: restored recurrent draft state for seq %d to step %u (%zu bytes)\n",
+                        seq_id, n_accepted, target_state.size());
+            }
+        }
+        seq_states.clear();
     }
 };
 

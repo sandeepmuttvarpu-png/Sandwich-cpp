@@ -1,4 +1,5 @@
 #include "ggml.h"
+#include "ggml-moe-prefetch.h"
 #include "ggml-cpp.h"
 #include "gguf.h"
 
@@ -1406,7 +1407,7 @@ static std::string sandwich_find_compatible_drafter(
             std::string cand_arch = gguf_get_val_str(cand_ctx.get(), cand_arch_id);
 
             bool is_same_family = false;
-            for (const char * fam : { "qwen", "llama", "gemma" }) {
+            for (const char * fam : { "qwen", "llama", "gemma", "lfm2" }) {
                 if (target_arch.rfind(fam, 0) == 0 && cand_arch.rfind(fam, 0) == 0) {
                     is_same_family = true;
                     break;
@@ -1543,6 +1544,13 @@ void sandwich_auto_dispatch(common_params & params) {
     // Optimize CPU thread allocation and core affinities for hybrid architectures
     sandwich_tune_pcore_affinity(params);
 
+    // Anti-Pattern Guard: Enforce no weight repacking (-rtr / --repack) for k-quants in hybrid mode.
+    // In hybrid offloading, row-interleaved weight repacking forces CPU graph allocation and destroys DRAM cache locality.
+    if (!params.no_extra_bufts) {
+        LOG_WRN("🥪 [Sandwich Anti-Pattern Guard] Disabling -rtr / --repack: row-interleaved repacking must NOT be used for k-quants in hybrid mode!\n");
+        params.no_extra_bufts = true;
+    }
+
     int64_t expert_count = 0;
 
     // 1. Direct check for general.expert_count
@@ -1605,15 +1613,74 @@ void sandwich_auto_dispatch(common_params & params) {
 
     if (is_moe) {
         LOG_INF("   -> Policy: MoE Expert Slab Staging Mode\n");
-        LOG_INF("   -> Setting n_gpu_layers = 99, moe_expert_cache_size = 32, cache_ram = 0\n");
+
+        size_t total_free_vram = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                size_t free_b = 0, total_b = 0;
+                ggml_backend_dev_memory(dev, &free_b, &total_b);
+                total_free_vram += free_b;
+            }
+        }
+
+        std::error_code ec;
+        uintmax_t model_file_size = std::filesystem::file_size(params.model.path, ec);
+        if (ec) {
+            model_file_size = 0;
+        }
+
+        const bool fits_in_vram = (total_free_vram > 0 && model_file_size > 0 && model_file_size + 1536ULL * 1024 * 1024 < total_free_vram);
+
+        if (fits_in_vram && params.moe_cache_size == 0) {
+            LOG_INF("   -> Model fits entirely within VRAM (%zu MiB vs %zu MiB free). Full GPU offload.\n",
+                    (size_t)(model_file_size / (1024 * 1024)), total_free_vram / (1024 * 1024));
+            params.n_gpu_layers = 99;
+        } else {
+            // Keep MoE expert weights in host CPU RAM and dynamically stage active experts via GPU VRAM cache
+            size_t free_vram_mib = total_free_vram / (1024 * 1024);
+            size_t moe_cache_mib = 2048;
+            if (free_vram_mib > 5120) {
+                moe_cache_mib = free_vram_mib - 3072;
+            } else if (free_vram_mib > 3072) {
+                moe_cache_mib = free_vram_mib - 2048;
+            } else if (free_vram_mib > 1024) {
+                moe_cache_mib = 1024;
+            }
+
+            if (params.moe_cache_size == 0) {
+                params.moe_cache_size = moe_cache_mib * 1024 * 1024;
+            }
+
+            // Ensure expert weights stay in host memory so GPU cache stages them
+            bool has_cpu_moe_override = false;
+            for (const auto & ov : params.tensor_buft_overrides) {
+                if (ov.pattern != nullptr && std::string(ov.pattern) == LLM_FFN_EXPS_REGEX) {
+                    has_cpu_moe_override = true;
+                    break;
+                }
+            }
+            if (!has_cpu_moe_override) {
+                while (!params.tensor_buft_overrides.empty() && params.tensor_buft_overrides.back().pattern == nullptr) {
+                    params.tensor_buft_overrides.pop_back();
+                }
+                params.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
+                params.tensor_buft_overrides.push_back({nullptr, nullptr});
+            }
+
+            LOG_INF("   -> Modern MoE Cache: %zu MiB VRAM Expert Slab (O(1) LRU eviction)\n",
+                    params.moe_cache_size / (1024 * 1024));
+            params.n_gpu_layers = 99;
+        }
+
+        LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD)\n");
         LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
-        params.n_gpu_layers          = -1;
-        params.moe_expert_cache_size = 32;
         params.cache_ram             = 0;
         params.cache_ram_mib         = 0;
         params.cache_type_k          = GGML_TYPE_TURBO4_0;
         params.cache_type_v          = GGML_TYPE_TURBO4_0;
         params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        ggml_moe_prefetch_set_n_threads(2);
     } else {
         // Dense Model Handling
         std::string drafter_path = params.speculative.draft.mparams.path;

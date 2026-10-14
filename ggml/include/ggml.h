@@ -589,6 +589,7 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_LATENT_ATTN,
 
         GGML_OP_UNARY,
 
@@ -2739,6 +2740,33 @@ extern "C" {
             struct ggml_tensor  * residual,
             struct ggml_tensor  * post,
             struct ggml_tensor  * comb);
+
+    // Latent attention with prefix over packed KV cache (dense Mode 0)
+    GGML_API struct ggml_tensor * ggml_latent_attn_prefix_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * cache,
+            struct ggml_tensor  * prefix_k,
+            struct ggml_tensor  * prefix_v,
+            struct ggml_tensor  * mask,
+            int                   dv,
+            int                   dv_off,
+            float                 scale,
+            float                 max_bias);
+
+    // Indexed latent attention over gathered cache rows (Mode 1)
+    GGML_API struct ggml_tensor * ggml_latent_attn_indexed_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * cache,
+            struct ggml_tensor  * prefix_k,
+            struct ggml_tensor  * prefix_v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * indices,
+            int                   dv,
+            int                   dv_off,
+            float                 scale,
+            float                 max_bias);
 
     // custom operators
 

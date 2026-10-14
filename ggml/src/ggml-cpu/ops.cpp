@@ -12530,3 +12530,262 @@ void ggml_compute_forward_lightning_indexer(
         }
     }
 }
+
+// ggml_compute_forward_latent_attn
+
+static void ggml_compute_forward_latent_attn_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * q        = dst->src[0];
+    const struct ggml_tensor * cache    = dst->src[1];
+    const struct ggml_tensor * prefix_k = dst->src[2];
+    const struct ggml_tensor * prefix_v = dst->src[3];
+    const struct ggml_tensor * mask     = dst->src[4];
+    const struct ggml_tensor * indices  = dst->src[5];
+
+    const int64_t Dk = q->ne[0];
+    const int64_t T  = q->ne[1];
+    const int64_t H  = q->ne[2];
+    const int64_t N  = cache->ne[1];
+    const int64_t P  = prefix_k ? prefix_k->ne[1] : 0;
+    const int64_t topk = indices ? indices->ne[0] : 0;
+
+    float scale;
+    memcpy(&scale, &dst->op_params[0], sizeof(float));
+    const int dv     = dst->op_params[2];
+    const int dv_off = dst->op_params[3];
+    const int mode   = dst->op_params[4];
+    GGML_ASSERT(mode == 0 || mode == 1);
+    GGML_ASSERT((indices != NULL) == (mode == 1));
+    GGML_ASSERT(dst->ne[0] == dv && dst->ne[1] == T && dst->ne[2] == H);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t score_count = P + (mode == 0 ? N : topk);
+    const int64_t stride = score_count + Dk;
+    float * scores = (float *) params->wdata + (size_t) ith * stride;
+    float * rowbuf = scores + score_count;
+
+    const bool cache_is_f32 = cache->type == GGML_TYPE_F32;
+    ggml_to_float_t cache_to_float = cache_is_f32 ? NULL : ggml_get_type_traits(cache->type)->to_float;
+
+    const int64_t QR = T * H;
+    const int64_t r0 = (QR *  ith   ) / nth;
+    const int64_t r1 = (QR * (ith+1)) / nth;
+
+    for (int64_t r = r0; r < r1; ++r) {
+        const int64_t t = r % T;
+        const int64_t h = r / T;
+
+        const float * qrow = (const float *)((const char *)q->data + t*q->nb[1] + h*q->nb[2]);
+
+        if (mode == 1) {
+            float * out = (float *)((char *)dst->data + t*dst->nb[1] + h*dst->nb[2]);
+            for (int64_t d = 0; d < dv; ++d) {
+                out[d] = 0.0f;
+            }
+
+            float mx = -INFINITY;
+            for (int64_t p = 0; p < P; ++p) {
+                const char * kcol = (const char *)prefix_k->data + p*prefix_k->nb[1];
+                float s = 0.0f;
+                if (prefix_k->type == GGML_TYPE_F32) {
+                    const float * kf = (const float *)kcol;
+                    for (int64_t i = 0; i < Dk; ++i) {
+                        s += qrow[i]*kf[i];
+                    }
+                } else {
+                    const ggml_fp16_t * kf = (const ggml_fp16_t *)kcol;
+                    for (int64_t i = 0; i < Dk; ++i) {
+                        s += qrow[i]*GGML_CPU_FP16_TO_FP32(kf[i]);
+                    }
+                }
+                scores[p] = scale*s;
+                mx = MAX(mx, scores[p]);
+            }
+
+            float sum = 0.0f;
+            for (int64_t p = 0; p < P; ++p) {
+                scores[p] = expf(scores[p] - mx);
+                sum += scores[p];
+            }
+            for (int64_t d = 0; d < dv; ++d) {
+                const char * pvd = prefix_v ? (const char *)prefix_v->data + d*prefix_v->nb[1] : NULL;
+                float acc = 0.0f;
+                if (P > 0) {
+                    if (prefix_v->type == GGML_TYPE_F32) {
+                        const float * pv = (const float *)pvd;
+                        for (int64_t p = 0; p < P; ++p) {
+                            acc += scores[p]*pv[p];
+                        }
+                    } else {
+                        const ggml_fp16_t * pv = (const ggml_fp16_t *)pvd;
+                        for (int64_t p = 0; p < P; ++p) {
+                            acc += scores[p]*GGML_CPU_FP16_TO_FP32(pv[p]);
+                        }
+                    }
+                }
+                out[d] = acc;
+            }
+
+            for (int64_t k = 0; k < topk; ++k) {
+                const int32_t idx = *(const int32_t *)((const char *)indices->data + t*indices->nb[1] + k*indices->nb[0]);
+                GGML_ASSERT(idx >= 0 && idx < N);
+
+                const char * crow = (const char *)cache->data + idx*cache->nb[1];
+                const float * cf;
+                if (cache_is_f32) {
+                    cf = (const float *)crow;
+                } else {
+                    cache_to_float(crow, rowbuf, Dk);
+                    cf = rowbuf;
+                }
+
+                float s = 0.0f;
+                for (int64_t i = 0; i < Dk; ++i) {
+                    s += qrow[i]*cf[i];
+                }
+                s *= scale;
+                if (mask) {
+                    s += *(const float *)((const char *)mask->data + t*mask->nb[1] + idx*mask->nb[0]);
+                }
+
+                if (mx == -INFINITY && s == -INFINITY) {
+                    continue;
+                }
+                if (s > mx) {
+                    const float rescale = expf(mx - s);
+                    sum = sum*rescale + 1.0f;
+                    for (int64_t d = 0; d < dv; ++d) {
+                        out[d] = out[d]*rescale + cf[dv_off + d];
+                    }
+                    mx = s;
+                } else {
+                    const float e = expf(s - mx);
+                    sum += e;
+                    for (int64_t d = 0; d < dv; ++d) {
+                        out[d] += e*cf[dv_off + d];
+                    }
+                }
+            }
+
+            const float inv = sum > 0.0f ? 1.0f/sum : 0.0f;
+            for (int64_t d = 0; d < dv; ++d) {
+                out[d] *= inv;
+            }
+            continue;
+        }
+
+        // Mode 0: dense prefix attention
+        for (int64_t p = 0; p < P; ++p) {
+            const char * kcol = (const char *)prefix_k->data + p*prefix_k->nb[1];
+            float s = 0.0f;
+            if (prefix_k->type == GGML_TYPE_F32) {
+                const float * kf = (const float *)kcol;
+                for (int64_t i = 0; i < Dk; ++i) {
+                    s += qrow[i]*kf[i];
+                }
+            } else {
+                const ggml_fp16_t * kf = (const ggml_fp16_t *)kcol;
+                for (int64_t i = 0; i < Dk; ++i) {
+                    s += qrow[i]*GGML_CPU_FP16_TO_FP32(kf[i]);
+                }
+            }
+            scores[p] = scale*s;
+        }
+        for (int64_t n = 0; n < N; ++n) {
+            const char * crow = (const char *)cache->data + n*cache->nb[1];
+            const float * cf;
+            if (cache_is_f32) {
+                cf = (const float *)crow;
+            } else {
+                cache_to_float(crow, rowbuf, Dk);
+                cf = rowbuf;
+            }
+            float s = 0.0f;
+            for (int64_t i = 0; i < Dk; ++i) {
+                s += qrow[i]*cf[i];
+            }
+            s *= scale;
+            if (mask) {
+                s += *(const float *)((const char *)mask->data + t*mask->nb[1] + n*mask->nb[0]);
+            }
+            scores[P + n] = s;
+        }
+
+        const int64_t M = P + N;
+        float mx = -INFINITY;
+        for (int64_t k = 0; k < M; ++k) {
+            mx = MAX(mx, scores[k]);
+        }
+        float sum = 0.0f;
+        for (int64_t k = 0; k < M; ++k) {
+            const float e = expf(scores[k] - mx);
+            scores[k] = e;
+            sum += e;
+        }
+        const float inv = sum > 0.0f ? 1.0f/sum : 0.0f;
+        for (int64_t k = 0; k < M; ++k) {
+            scores[k] *= inv;
+        }
+
+        float * out = (float *)((char *)dst->data + t*dst->nb[1] + h*dst->nb[2]);
+        for (int64_t d = 0; d < dv; ++d) {
+            out[d] = 0.0f;
+        }
+
+        for (int64_t d = 0; d < dv; ++d) {
+            const char * pvd = prefix_v ? (const char *)prefix_v->data + d*prefix_v->nb[1] : NULL;
+            float acc = 0.0f;
+            if (P > 0) {
+                if (prefix_v->type == GGML_TYPE_F32) {
+                    const float * pv = (const float *)pvd;
+                    for (int64_t p = 0; p < P; ++p) {
+                        acc += scores[p]*pv[p];
+                    }
+                } else {
+                    const ggml_fp16_t * pv = (const ggml_fp16_t *)pvd;
+                    for (int64_t p = 0; p < P; ++p) {
+                        acc += scores[p]*GGML_CPU_FP16_TO_FP32(pv[p]);
+                    }
+                }
+            }
+            out[d] = acc;
+        }
+
+        for (int64_t n = 0; n < N; ++n) {
+            const float w = scores[P + n];
+            if (w == 0.0f) {
+                continue;
+            }
+            const char * crow = (const char *)cache->data + n*cache->nb[1];
+            const float * cf;
+            if (cache_is_f32) {
+                cf = (const float *)crow;
+            } else {
+                cache_to_float(crow, rowbuf, Dk);
+                cf = rowbuf;
+            }
+            const float * cv = cf + dv_off;
+            for (int64_t d = 0; d < dv; ++d) {
+                out[d] += w * cv[d];
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_latent_attn(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_latent_attn_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}

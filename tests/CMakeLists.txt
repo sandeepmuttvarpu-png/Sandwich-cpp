@@ -311,6 +311,10 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
     llama_build_and_test(test-quantize-perf.cpp)
     llama_build_and_test(test-rope.cpp)
     llama_build_and_test(test-col2im-1d.cpp)
+    llama_build_and_test(test-moe-cache-shares.cpp)
+    llama_build_and_test(test-latent-attn.cpp)
+    llama_build_and_test(test-iqk.cpp)
+    target_link_libraries(test-iqk PRIVATE ggml-iqk)
 endif()
 
 # libmtmd

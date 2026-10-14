@@ -1,4 +1,5 @@
 #include "llama-moe-cache.h"
+#include "llama-moe-cache-share.h"
 
 #include "llama-impl.h"
 #include "llama-model.h"
@@ -282,24 +283,44 @@ struct llama_moe_cache::impl {
         const bool split_by_free = tensor_split == nullptr ||
             std::all_of(tensor_split, tensor_split + model.n_devices(), [](float x) { return x == 0.0f; });
         double split_sum = 0.0;
-        for (device & d : devices) {
-            if (d.host_bytes == 0) {
-                continue;
+        if (!split_by_free) {
+            std::vector<float> cumulative(model.n_devices());
+            std::vector<bool> eligible(model.n_devices(), false);
+            for (int i = 0; i < model.n_devices(); ++i) {
+                cumulative[i] = tensor_split[i];
             }
-            ggml_backend_dev_t dev = ggml_backend_get_device(d.backend);
-            if (split_by_free) {
-                size_t free;
-                size_t total;
-                ggml_backend_dev_memory(dev, &free, &total);
-                d.split = (double) free;
-            } else {
+            for (const device & d : devices) {
+                if (d.host_bytes > 0) {
+                    ggml_backend_dev_t dev = ggml_backend_get_device(d.backend);
+                    const auto it = std::find_if(model.devices.begin(), model.devices.end(), [&](const llama_device & ld) { return ld.dev == dev; });
+                    if (it != model.devices.end()) {
+                        eligible[it - model.devices.begin()] = true;
+                    }
+                }
+            }
+            const auto shares = llama_moe_cache_detail::device_shares(cumulative, eligible);
+            for (device & d : devices) {
+                if (d.host_bytes == 0) continue;
+                ggml_backend_dev_t dev = ggml_backend_get_device(d.backend);
                 const auto it = std::find_if(model.devices.begin(), model.devices.end(), [&](const llama_device & ld) { return ld.dev == dev; });
                 GGML_ASSERT(it != model.devices.end());
-                d.split = (double) tensor_split[it - model.devices.begin()];
+                d.split = shares[it - model.devices.begin()];
+                split_sum += d.split;
             }
-            split_sum += d.split;
+        } else {
+            for (device & d : devices) {
+                if (d.host_bytes == 0) {
+                    continue;
+                }
+                ggml_backend_dev_t dev = ggml_backend_get_device(d.backend);
+                size_t free = 0;
+                size_t total = 0;
+                ggml_backend_dev_memory(dev, &free, &total);
+                d.split = (double) free;
+                split_sum += d.split;
+            }
         }
-        if (split_sum == 0.0) {
+        if (split_sum <= 0.0) {
             // the devices do not report their free memory
             for (device & d : devices) {
                 d.split    = d.host_bytes > 0 ? 1.0 : 0.0;
