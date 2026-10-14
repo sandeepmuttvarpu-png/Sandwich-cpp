@@ -15,6 +15,9 @@
     <!-- Top Navigation Bar -->
     <header id="top-navbar">
       <div class="nav-left">
+        <button id="sidebar-toggle-btn" class="nav-btn icon-only" title="Toggle Sessions Dashboard (Ctrl+B)">
+          <span class="btn-icon">☰</span>
+        </button>
         <div class="logo">
           <span class="logo-icon">🥪</span>
           <span class="logo-title">Sandwich<span class="accent">.cpp</span></span>
@@ -27,141 +30,279 @@
       </div>
       
       <div class="nav-right">
+        <button id="new-chat-nav-btn" class="nav-btn primary" title="Start New Conversation">
+          <span class="btn-icon">＋</span>
+          <span class="btn-text">New Chat</span>
+        </button>
         <button id="hud-toggle-btn" class="nav-btn active" title="Toggle Engine Telemetry HUD">
           <span class="btn-icon">⚡</span>
           <span class="btn-text">Telemetry HUD</span>
         </button>
-        <button id="clear-chat-btn" class="nav-btn" title="Clear Conversation">
+        <button id="clear-chat-btn" class="nav-btn" title="Clear Current Conversation">
           <span class="btn-icon">🗑️</span>
           <span class="btn-text">Clear</span>
         </button>
       </div>
     </header>
 
-    <!-- Engine Telemetry HUD (Fixed Position Panel) -->
-    <aside id="telemetry-hud" class="hud-panel">
-      <div class="hud-header">
-        <div class="hud-title">
-          <span class="pulse-indicator"></span>
-          <span>Engine Telemetry</span>
+    <!-- App Body: Sessions Dashboard Sidebar + Main Workspace -->
+    <div id="workspace">
+      <!-- Left Sidebar: Sessions Dashboard -->
+      <aside id="sessions-sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-title-row">
+            <span class="sidebar-title-icon">💬</span>
+            <span class="sidebar-title-text">Sessions Dashboard</span>
+          </div>
+          <button id="new-chat-sidebar-btn" class="icon-btn-compact" title="Create New Session">
+            ＋
+          </button>
         </div>
-        <span class="hud-tag">HARDWARE ACTIVE</span>
-      </div>
-      
-      <div class="hud-grid">
-        <div class="hud-metric">
-          <div class="metric-label">MoE Cache</div>
-          <div class="metric-value text-accent">4633 MiB (O(1) LRU)</div>
-          <div class="metric-sub">Dynamic VRAM Expert Slab</div>
-        </div>
-        
-        <div class="hud-metric">
-          <div class="metric-label">Speculative Drafter</div>
-          <div class="metric-value text-success">LFM2-8B (214 t/s)</div>
-          <div class="metric-sub">Lossless Recurrent Rollback</div>
-        </div>
-        
-        <div class="hud-metric">
-          <div class="metric-label">KV Compression</div>
-          <div class="metric-value text-warning">TurboQuant 4-Bit</div>
-          <div class="metric-sub">WHT 75% Memory Reduction</div>
-        </div>
-        
-        <div class="hud-metric">
-          <div class="metric-label">Host Offload Engine</div>
-          <div class="metric-value">sandwich.cpp v3.0</div>
-          <div class="metric-sub">AVX2 + AVX-VNNI (Zen4/Raptor)</div>
-        </div>
-      </div>
 
-      <div class="hud-footer">
-        <div class="hud-badge-row">
-          <span class="badge badge-success">MADV_COLD Prefetcher</span>
-          <span class="badge badge-primary">2MB THP Aligned</span>
-          <span class="badge badge-warning">Anti-Pattern Guard</span>
+        <div class="sidebar-search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="session-search-input" placeholder="Search sessions..." />
         </div>
-      </div>
-    </aside>
 
-    <!-- Main Chat Container -->
-    <main id="chat-viewport">
-      <div id="chat-history">
-        <!-- Welcome Hero Screen -->
-        <div id="welcome-hero" class="hero-screen">
-          <div class="hero-icon">🥪</div>
-          <h1>Sandwich<span class="accent">.cpp</span> Workstation</h1>
-          <p class="hero-subtitle">High-performance local inference powered by O(1) LRU MoE caching, FlashMLA, and TurboQuant compression.</p>
+        <!-- Scrollable Sessions List -->
+        <div id="sessions-list" class="sessions-container">
+          <!-- Dynamically populated session items -->
+        </div>
+
+        <!-- Sidebar Footer Actions -->
+        <div class="sidebar-footer">
+          <button id="clear-all-sessions-btn" class="sidebar-btn-danger" title="Delete All Stored Sessions">
+            <span class="btn-icon">🗑️</span>
+            <span>Clear All Sessions</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main Workspace Center -->
+      <div id="chat-workspace">
+        <!-- Engine Telemetry HUD (Collapsible Fixed/Float Panel) -->
+        <aside id="telemetry-hud" class="hud-panel">
+          <div class="hud-header">
+            <div class="hud-title">
+              <span class="pulse-indicator"></span>
+              <span>Engine Telemetry</span>
+            </div>
+            <span class="hud-tag">HARDWARE ACTIVE</span>
+          </div>
           
-          <div class="hero-features">
-            <div class="feature-card">
-              <span class="feat-icon">⚡</span>
-              <h3>Dynamic MoE Caching</h3>
-              <p>Execute 30B–35B MoE architectures locally on consumer 8GB GPUs without PCIe stalls.</p>
+          <div class="hud-grid">
+            <div class="hud-metric">
+              <div class="metric-label">MoE Cache</div>
+              <div class="metric-value text-accent">4633 MiB (O(1) LRU)</div>
+              <div class="metric-sub">Dynamic VRAM Expert Slab</div>
             </div>
-            <div class="feature-card">
-              <span class="feat-icon">🚀</span>
-              <h3>Speculative Decoding</h3>
-              <p>Paired DFlash2, MTP assistant, and small GGUF drafters for up to 3.5× faster generation.</p>
+            
+            <div class="hud-metric">
+              <div class="metric-label">Speculative Drafter</div>
+              <div class="metric-value text-success">LFM2-8B (214 t/s)</div>
+              <div class="metric-sub">Lossless Recurrent Rollback</div>
             </div>
-            <div class="feature-card">
-              <span class="feat-icon">💾</span>
-              <h3>TurboQuant KV</h3>
-              <p>75% smaller KV cache footprint with Walsh-Hadamard transform acceleration.</p>
+            
+            <div class="hud-metric">
+              <div class="metric-label">KV Compression</div>
+              <div class="metric-value text-warning">TurboQuant 4-Bit</div>
+              <div class="metric-sub">WHT 75% Memory Reduction</div>
+            </div>
+            
+            <div class="hud-metric">
+              <div class="metric-label">Host Offload Engine</div>
+              <div class="metric-value">sandwich.cpp v3.0</div>
+              <div class="metric-sub">AVX2 + AVX-VNNI (Zen4/Raptor)</div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- Typing / Streaming Indicator (Lettuce Green) -->
-      <div id="typing-indicator" class="typing-container hidden">
-        <div class="typing-bubble">
-          <span class="typing-dot"></span>
-          <span class="typing-dot"></span>
-          <span class="typing-dot"></span>
-          <span class="typing-label">Sandwich Engine generating...</span>
-        </div>
-      </div>
-    </main>
-
-    <!-- Chat Input Area -->
-    <footer id="chat-footer">
-      <!-- Collapsible System Prompt Accordion -->
-      <details id="system-prompt-drawer">
-        <summary>System Prompt Configuration</summary>
-        <div class="drawer-content">
-          <textarea id="system-prompt-input" rows="2" placeholder="You are a helpful, brilliant AI assistant running locally on Sandwich.cpp..."></textarea>
-        </div>
-      </details>
-
-      <form id="chat-form">
-        <div class="input-container">
-          <textarea 
-            id="user-input" 
-            placeholder="Type your message to Sandwich.cpp... (Shift+Enter for newline)"
-            rows="1"
-            autofocus
-          ></textarea>
-          
-          <div class="action-buttons">
-            <button type="button" id="stop-btn" class="control-btn btn-danger hidden" title="Stop Generation">
-              <span class="btn-icon">⏹</span>
-              <span>Stop</span>
-            </button>
-            <button type="submit" id="send-btn" class="control-btn btn-primary" title="Send Message">
-              <span class="btn-icon">➤</span>
-              <span>Send</span>
-            </button>
+          <div class="hud-footer">
+            <div class="hud-badge-row">
+              <span class="badge badge-success">MADV_COLD Prefetcher</span>
+              <span class="badge badge-primary">2MB THP Aligned</span>
+              <span class="badge badge-warning">Anti-Pattern Guard</span>
+            </div>
           </div>
-        </div>
-        <div class="input-meta">
-          <span>Engine: <strong id="meta-engine-tag">sandwich.cpp v3.0</strong></span>
-          <span class="meta-separator">•</span>
-          <span>SSE Streaming: <strong class="text-success">Active</strong></span>
-          <span class="meta-separator">•</span>
-          <span id="speed-indicator">Ready</span>
-        </div>
-      </form>
-    </footer>
+        </aside>
+
+        <!-- Main Chat Messages Viewport -->
+        <main id="chat-viewport">
+          <div id="chat-history">
+            <!-- Welcome Hero Screen -->
+            <div id="welcome-hero" class="hero-screen">
+              <div class="hero-icon">🥪</div>
+              <h1>Sandwich<span class="accent">.cpp</span> Workstation</h1>
+              <p class="hero-subtitle">High-performance local inference powered by O(1) LRU MoE caching, FlashMLA, and TurboQuant compression.</p>
+              
+              <div class="hero-features">
+                <div class="feature-card">
+                  <span class="feat-icon">⚡</span>
+                  <h3>Dynamic MoE Caching</h3>
+                  <p>Execute 30B–35B MoE architectures locally on consumer 8GB GPUs without PCIe stalls.</p>
+                </div>
+                <div class="feature-card">
+                  <span class="feat-icon">🚀</span>
+                  <h3>Speculative Decoding</h3>
+                  <p>Paired DFlash2, MTP assistant, and small GGUF drafters for up to 3.5× faster generation.</p>
+                </div>
+                <div class="feature-card">
+                  <span class="feat-icon">💾</span>
+                  <h3>TurboQuant KV</h3>
+                  <p>75% smaller KV cache footprint with Walsh-Hadamard transform acceleration.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Drag and Drop Overlay Indicator -->
+          <div id="drop-overlay" class="drop-overlay hidden">
+            <div class="drop-modal">
+              <span class="drop-icon">📂</span>
+              <h3>Drop files here to attach</h3>
+              <p>Supports images, text, code, audio, video, and documents</p>
+            </div>
+          </div>
+
+          <!-- Typing / Streaming Indicator (Lettuce Green) -->
+          <div id="typing-indicator" class="typing-container hidden">
+            <div class="typing-bubble">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-label">Sandwich Engine generating...</span>
+            </div>
+          </div>
+        </main>
+
+        <!-- Chat Input Footer Area: Vanilla llama.cpp Web UI Prompt Composer -->
+        <footer id="chat-footer">
+          <!-- Hidden File Inputs for Full Multimodal Attachments -->
+          <input type="file" id="file-input-all" multiple accept="image/*,audio/*,video/*,.pdf,.txt,.md,.json,.csv,.py,.cpp,.c,.h,.hpp,.js,.ts,.html,.css,.xml,.yml,.yaml,.log" style="display:none">
+          <input type="file" id="file-input-images" multiple accept="image/*" style="display:none">
+          <input type="file" id="file-input-audio" multiple accept="audio/*" style="display:none">
+
+          <!-- System Prompt Modal / Drawer -->
+          <div id="system-prompt-modal" class="modal-backdrop hidden">
+            <div class="modal-card">
+              <div class="modal-header">
+                <h3>⚙️ System Prompt Configuration</h3>
+                <button type="button" id="close-sysprompt-modal" class="close-btn">&times;</button>
+              </div>
+              <div class="modal-body">
+                <p class="modal-help">Define custom behavioral instructions for the AI in this session.</p>
+                <textarea id="system-prompt-input" rows="4" placeholder="You are a helpful, brilliant AI assistant running locally on Sandwich.cpp..."></textarea>
+              </div>
+              <div class="modal-actions">
+                <button type="button" id="reset-sysprompt-btn" class="btn-secondary">Reset Default</button>
+                <button type="button" id="save-sysprompt-btn" class="btn-primary">Apply Prompt</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- The Vanilla llama.cpp Prompt Input Container Surface -->
+          <form id="chat-form" class="composer-form">
+            <div id="input-surface" class="composer-container">
+              <!-- Attachments Tray: Rendered chips for attached files -->
+              <div id="attachments-tray" class="attachments-list hidden">
+                <!-- Dynamically added attachment chips -->
+              </div>
+
+              <!-- Main Input Row with Textarea -->
+              <div class="composer-input-row">
+                <textarea 
+                  id="user-input" 
+                  placeholder="Type a message... (Drop files or paste images)"
+                  rows="1"
+                  autofocus
+                ></textarea>
+              </div>
+
+              <!-- Composer Actions Bar (Bottom Row) -->
+              <div class="composer-actions-bar">
+                <div class="actions-left">
+                  <!-- Attachment Add Button (+) -->
+                  <div class="dropdown-wrapper">
+                    <button type="button" id="add-attachment-btn" class="action-btn icon-circle" title="Add Attachments / Options">
+                      <span class="btn-icon">＋</span>
+                    </button>
+                    <!-- Attachment Menu Dropdown -->
+                    <div id="attachment-menu" class="dropdown-menu hidden">
+                      <button type="button" class="menu-item" id="menu-upload-files">
+                        <span class="menu-icon">📎</span>
+                        <span class="menu-text">Upload Files / Media</span>
+                      </button>
+                      <button type="button" class="menu-item" id="menu-upload-images">
+                        <span class="menu-icon">🖼️</span>
+                        <span class="menu-text">Attach Images</span>
+                      </button>
+                      <button type="button" class="menu-item" id="menu-upload-audio">
+                        <span class="menu-icon">🎵</span>
+                        <span class="menu-text">Attach Audio File</span>
+                      </button>
+                      <div class="menu-divider"></div>
+                      <button type="button" class="menu-item" id="menu-system-prompt">
+                        <span class="menu-icon">⚙️</span>
+                        <span class="menu-text">Set System Prompt</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Microphone Voice Recording Button -->
+                  <button type="button" id="mic-btn" class="action-btn icon-circle" title="Voice Input (Record Audio)">
+                    <span class="btn-icon">🎙️</span>
+                    <span id="recording-timer" class="recording-timer hidden">0:00</span>
+                  </button>
+
+                  <!-- Reasoning / Thinking Mode Pill -->
+                  <button type="button" id="reasoning-toggle-btn" class="pill-btn" title="Toggle Reasoning / Thinking Output">
+                    <span class="pill-dot"></span>
+                    <span class="pill-text">Thinking</span>
+                  </button>
+
+                  <!-- Model Selector Dropdown -->
+                  <div class="dropdown-wrapper">
+                    <button type="button" id="model-picker-btn" class="pill-btn model-selector-pill" title="Select Active Model">
+                      <span class="model-tag">Model:</span>
+                      <span id="selected-model-label">Loading...</span>
+                      <span class="dropdown-arrow">▾</span>
+                    </button>
+                    <div id="model-picker-dropdown" class="dropdown-menu hidden">
+                      <!-- Model list items -->
+                    </div>
+                  </div>
+                </div>
+
+                <div class="actions-right">
+                  <!-- Character / Context Counter -->
+                  <div id="token-counter" class="token-counter" title="Character count and estimated tokens">
+                    0 chars
+                  </div>
+
+                  <!-- Stop Generation Button (Tomato Red) -->
+                  <button type="button" id="stop-btn" class="submit-circle-btn btn-danger hidden" title="Stop Generation">
+                    <span class="btn-icon">⏹</span>
+                  </button>
+
+                  <!-- Send Message Button (Arrow Up / Lettuce Green) -->
+                  <button type="submit" id="send-btn" class="submit-circle-btn btn-primary" title="Send Message (Enter)">
+                    <span class="btn-icon">↑</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer Status / Telemetry Meta Bar -->
+            <div class="composer-meta">
+              <span>Engine: <strong id="meta-engine-tag">sandwich.cpp v3.0</strong></span>
+              <span class="meta-separator">•</span>
+              <span>SSE Streaming: <strong class="text-success">Active</strong></span>
+              <span class="meta-separator">•</span>
+              <span id="speed-indicator">Ready</span>
+            </div>
+          </form>
+        </footer>
+      </div>
+    </div>
   </div>
 
   <script src="chat.js"></script>
