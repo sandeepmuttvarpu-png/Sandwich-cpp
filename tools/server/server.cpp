@@ -212,6 +212,8 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
         std::error_code ec;
         if (std::filesystem::exists("tools/server/public/index.html", ec)) {
             params.public_path = "tools/server/public";
+        } else if (std::filesystem::exists("/home/sandeep/dev/sandwich/sandwich-cpp/tools/server/public/index.html", ec)) {
+            params.public_path = "/home/sandeep/dev/sandwich/sandwich-cpp/tools/server/public";
         } else if (std::filesystem::exists("examples/server/public/index.html", ec)) {
             params.public_path = "examples/server/public";
         }
