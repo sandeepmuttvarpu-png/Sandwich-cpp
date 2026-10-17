@@ -98,6 +98,19 @@ typedef enum {
     IQK_QUANT_TYPE_IQ4_KS_R16 = 3,
 } iqk_quant_type;
 
+// =============================================================================
+// Extended GGML Type IDs for IQK Sparse Formats (Zero Collision with TurboQuant 43-45)
+// =============================================================================
+#define GGML_TYPE_IQK_BASE       134
+#define GGML_TYPE_IQ2_KS_EXT     (GGML_TYPE_IQK_BASE + 0) // 134
+#define GGML_TYPE_IQ3_KS_EXT     (GGML_TYPE_IQK_BASE + 1) // 135
+#define GGML_TYPE_IQ4_KS_EXT     (GGML_TYPE_IQK_BASE + 2) // 136
+#define GGML_TYPE_IQ4_KS_R16_EXT (GGML_TYPE_IQK_BASE + 3) // 137
+
+#ifdef __cplusplus
+static_assert(GGML_TYPE_IQK_BASE >= 134, "IQK types must be >= 134 to prevent enum collision with TurboQuant (43-45)");
+#endif
+
 bool iqk_gemm_hybrid_cpu(
         iqk_quant_type type,
         int nr, int nc, int k,

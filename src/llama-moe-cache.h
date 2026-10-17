@@ -38,6 +38,10 @@ public:
     bool is_pinned_dma_enabled() const;
     size_t pinned_buffer_size() const;
 
+    // Phase 6: Query fine-grained micro-expert status and total slot capacity
+    bool is_fine_grained() const;
+    int32_t total_cached_slots() const;
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

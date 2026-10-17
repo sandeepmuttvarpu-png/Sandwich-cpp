@@ -6,12 +6,17 @@
 
 #include "ggml-cpp.h"
 #include "ggml-moe-prefetch.h"
+#include "ggml-iqk.h"
 
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+
+// Phase 6: Zero enum collisions verification between TurboQuant types (43-45) and IQK types (134+)
+static_assert(GGML_TYPE_TURBO4_0 == 45, "TurboQuant type enum mismatch");
+static_assert(GGML_TYPE_IQ2_KS_EXT >= 134, "IQK type collision guard failed");
 
 namespace {
 
@@ -20,8 +25,14 @@ struct moe_cache_lru {
     int32_t n_expert = 0;
     int32_t n_slots  = 0;
 
+    // Phase 6: Fast struct key to eliminate 64-bit hardware integer division on hot eviction path
+    struct slot_key {
+        int32_t il = -1;
+        int32_t expert = -1;
+    };
+
     std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
-    std::vector<int32_t>   key_of;   // [n_slots] il*n_expert + expert, -1 if empty
+    std::vector<slot_key>  key_of;   // [n_slots] layer and expert key, {-1, -1} if empty
 
     // doubly linked list of the slots, head is the least recently used
     std::vector<int32_t> prev;
@@ -37,7 +48,7 @@ struct moe_cache_lru {
         this->n_expert = n_expert;
         this->n_slots  = n_slots;
         slot_map.assign(n_layer, nullptr);
-        key_of.assign(n_slots, -1);
+        key_of.assign(n_slots, { -1, -1 });
         prev.resize(n_slots);
         next.resize(n_slots);
         for (int32_t s = 0; s < n_slots; ++s) {
@@ -110,10 +121,10 @@ struct moe_cache_lru {
                 continue;
             }
             const int32_t s = head;
-            if (key_of[s] >= 0) {
-                slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = -1;
+            if (key_of[s].il >= 0 && key_of[s].expert >= 0) {
+                slot_map[key_of[s].il][key_of[s].expert] = -1;
             }
-            key_of[s] = il*n_expert + e;
+            key_of[s] = { il, e };
             slots[e] = s;
             touch(s);
             fills.push_back({ e, s });
@@ -389,8 +400,22 @@ struct llama_moe_cache::impl {
             const int32_t n_expert  = g.ref[0]->ne[2];
             const size_t  budget    = (size_t) ((double) size*d.split/split_sum*g.host_bytes/d.host_bytes);
             const int32_t max_slots = g.layers.size()*n_expert;
-            while (g.n_slots < max_slots && alloc_size(g, g.n_slots + 1) <= budget) {
-                g.n_slots++;
+            // Phase 6: High-performance binary search for slot budget sizing
+            // Handles both macro-experts and 24,576+ micro-expert topologies in O(log N)
+            int32_t low = 0;
+            int32_t high = max_slots;
+            while (low <= high) {
+                int32_t mid = low + (high - low) / 2;
+                if (alloc_size(g, mid) <= budget) {
+                    g.n_slots = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+            if (llama_moe_cache_detail::is_fine_grained_moe(n_expert, n_expert_used)) {
+                LLAMA_LOG_INFO("%s: Fine-Grained MoE Topology: %d micro-experts per layer, %d slots cached in VRAM slab\n",
+                    __func__, n_expert, g.n_slots);
             }
             if (g.n_slots < n_expert_used) {
                 LLAMA_LOG_WARN("%s: MoE cache budget is too small for %zu layers, they are not cached\n", __func__, g.layers.size());
@@ -739,6 +764,23 @@ size_t llama_moe_cache::pinned_buffer_size() const {
     size_t total = 0;
     for (const auto & d : pimpl->devices) {
         total += d.pinned_ring.size;
+    }
+    return total;
+}
+
+bool llama_moe_cache::is_fine_grained() const {
+    for (const auto & g : pimpl->groups) {
+        if (!g.ref.empty() && llama_moe_cache_detail::is_fine_grained_moe(g.ref[0]->ne[2], pimpl->n_expert_used)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int32_t llama_moe_cache::total_cached_slots() const {
+    int32_t total = 0;
+    for (const auto & g : pimpl->groups) {
+        total += g.n_slots;
     }
     return total;
 }
