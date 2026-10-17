@@ -23,6 +23,9 @@ void ggml_moe_prefetch_new_epoch(void);
 // Asynchronously prefetch selected expert weight slices for an MoE node
 void ggml_moe_prefetch_node(const struct ggml_tensor * node);
 
+// Asynchronously prefetch a specific expert slice (by memory address and size)
+void ggml_moe_prefetch_slice(const void * addr, size_t size);
+
 // Prefetch a whole tensor's mapped pages asynchronously (e.g. prompt lookahead)
 void ggml_moe_prefetch_tensor(const struct ggml_tensor * w);
 

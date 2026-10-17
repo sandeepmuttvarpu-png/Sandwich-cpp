@@ -2671,9 +2671,6 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         return false;
     }
 
-    // Asynchronously prefetch selected experts prior to kernel execution
-    ggml_moe_prefetch_node(node);
-
     const ggml_tensor * ids = node->src[2];
     if (ggml_nelements(ids) == 0) {
         return true;
@@ -2697,6 +2694,16 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         }
 
         st.ids = ids;
+    }
+
+    // Asynchronously prefetch CPU-mapped expert weight slices for the active experts
+    if (ggml_moe_prefetch_enabled() && src && src->data) {
+        for (int64_t exp = 0; exp < n_expert; exp++) {
+            if (st.used[exp]) {
+                const void * exp_addr = (const char *) src->data + (size_t) exp * expert_size;
+                ggml_moe_prefetch_slice(exp_addr, expert_size);
+            }
+        }
     }
 
     // group consecutive experts and copy them together

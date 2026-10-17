@@ -1,4 +1,5 @@
 #include "ggml-moe-prefetch.h"
+#include "ggml-backend.h"
 
 #include <vector>
 #include <deque>
@@ -246,8 +247,18 @@ void ggml_moe_prefetch_new_epoch(void) {
     prefetch_service::instance().bump_epoch();
 }
 
+void ggml_moe_prefetch_slice(const void * addr, size_t size) {
+    if (!addr || size == 0) return;
+    auto & svc = prefetch_service::instance();
+    if (!svc.is_enabled()) return;
+    if (svc.is_registered(addr, size)) {
+        svc.enqueue(const_cast<void *>(addr), size, /* is_cold = */ false);
+    }
+}
+
 void ggml_moe_prefetch_tensor(const struct ggml_tensor * w) {
     if (!w || !w->data) return;
+    if (w->buffer && !ggml_backend_buffer_is_host(w->buffer)) return;
     auto & svc = prefetch_service::instance();
     size_t nbytes = ggml_nbytes(w);
     if (svc.is_registered(w->data, nbytes)) {
@@ -257,6 +268,7 @@ void ggml_moe_prefetch_tensor(const struct ggml_tensor * w) {
 
 void ggml_moe_prefetch_cold(const struct ggml_tensor * w) {
     if (!w || !w->data) return;
+    if (w->buffer && !ggml_backend_buffer_is_host(w->buffer)) return;
     auto & svc = prefetch_service::instance();
     size_t nbytes = ggml_nbytes(w);
     if (svc.is_registered(w->data, nbytes)) {
@@ -277,6 +289,10 @@ void ggml_moe_prefetch_node(const struct ggml_tensor * node) {
     const struct ggml_tensor * ids_tensor = node->src[2];
 
     if (!weights || !weights->data || !ids_tensor || !ids_tensor->data) return;
+
+    // Safety: ensure both tensors are located in host (CPU) memory before accessing ->data
+    if (weights->buffer && !ggml_backend_buffer_is_host(weights->buffer)) return;
+    if (ids_tensor->buffer && !ggml_backend_buffer_is_host(ids_tensor->buffer)) return;
 
     // ids_tensor shape: [n_expert_used, n_tokens]
     const int64_t n_expert_used = ids_tensor->ne[0];
