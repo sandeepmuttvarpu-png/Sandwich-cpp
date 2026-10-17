@@ -1765,7 +1765,7 @@ void sandwich_auto_dispatch(common_params & params) {
             params.n_gpu_layers          = optimal_layers;
             params.moe_expert_cache_size = 0;
             params.parallel_decoding     = true;
-            if (params.n_parallel <= 1) {
+            if (params.n_parallel < 0) {
                 params.n_parallel = 4;
             }
             params.cont_batching         = true;
