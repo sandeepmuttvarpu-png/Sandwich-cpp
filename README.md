@@ -1,7 +1,7 @@
 # 🥪 Sandwich.cpp
 
 > **Unified High-Performance Local LLM Engine for Consumer GPUs**  
-> *Modern MoE Cache + FlashMLA + TurboQuant 4-Bit KV Compression + SOTA IQK Engine + Auto-Dispatch*
+> *MoE Expert Cache + FlashMLA + TurboQuant 4-Bit KV + SOTA IQK Engine + OpenCode Agentic Coding*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CUDA: 12.0+](https://img.shields.io/badge/CUDA-12.0%2B-green.svg)](https://developer.nvidia.com/cuda-toolkit)
@@ -37,6 +37,17 @@ Sandwich.cpp integrates four major architectural milestones developed under clea
 - **Modular `ggml-iqk` Helper Library:** Dedicated sub-library (`ggml/src/ggml-iqk/`) providing SIMD dot products and multi-threaded hybrid GEMM scheduling for `IQ2_KS`, `IQ3_KS`, `IQ4_KS`, and `IQ4_KS_R16`.
 - **AVX2 & AVX-512 VNNI Vector Acceleration:** Features runtime CPUID dispatch (Leaf 7 Subleaf 0 & 1) utilizing `_mm256_dpbusd_epi32` on Intel 12th–14th Gen Hybrid / AMD Zen 4/5 CPUs for hybrid CPU fallback layers.
 - **Anti-Pattern Guard (`-rtr` Prevention):** The auto-dispatcher strictly prohibits `-rtr` (row-interleaved repacking) for k-quants in hybrid mode, preventing host allocations that destroy GPU VRAM staging.
+
+### 5. Phase 5: Pinned Host Memory & Early-Lookahead Router (Zero-Copy PCIe DMA)
+- **Pinned Host Memory Registration:** Uses `cudaHostRegister` on mmap-backed CPU expert weights to enable high-speed asynchronous PCIe DMA uploads directly to GPU VRAM, tripling transfer bandwidth from ~6 GB/s to ~20 GB/s.
+- **Early-Lookahead Router:** Predicts next-layer expert routing from intermediate hidden states to initiate zero-copy DMA transfers ahead of execution.
+- **Asymmetric Mixed-Precision Staging:** Keeps the dense backbone in high precision (FP16/Q4_K) while streaming extreme sub-4-bit quantized expert weights (`IQ2_XXS`, `IQ3_XXS`) on demand.
+
+### 6. Phase 6: Thecodacus MoE Expert Cache, Asynchronous Overlap & Profiling Suite
+- **Dual-Path VRAM MoE Expert Cache (`--moe-cache-slots`):** Keeps the hottest, most-frequently routed experts permanently packed in GPU VRAM slabs while routing cold experts to CPU; outputs are merged with 100% bit-identical precision.
+- **Concurrent CPU/GPU Overlapped Execution (`--sched-async-cpu`):** Dedicated persistent background thread runs CPU cold-expert splits simultaneously alongside GPU hot-expert execution, eliminating CPU dispatch bottlenecks.
+- **Expanded Architecture Graph Wiring:** Native hot-cache support for `laguna` and Qwen3.8-Flash-Next (`qwen4exp`) architectures.
+- **Offline Trace Utility (`llama-moe-trace`):** Standalone profiling tool that captures model routing distributions across diverse prompts to generate workload-tuned routing profile CSVs (`--moe-cache-profile`).
 
 ---
 
@@ -302,7 +313,64 @@ A warning instead of this line means the cache fell back to baseline (see Tuning
 
 ## 🛠️ How to Use It
 
-### 1. Interactive Terminal CLI
+### 1. One-Word Launcher: `sandwich-serve` (OpenCode & Agent Ready)
+
+Sandwich.cpp provides a unified one-word launcher script `sandwich-serve` with an interactive `fzf` model picker, background daemonization (`setsid`), health monitoring, and seamless OpenCode integration:
+
+```bash
+sandwich-serve
+```
+
+- **Interactive Model Selection:** Fuzzy-searches `~/ai-models` and previews model size and architecture.
+- **Detached Background Execution:** Spawns `llama-server` in a separate session (`setsid`), safe from terminal disconnects.
+- **Full Context per Slot:** Configures 32,768-token context per slot (`-np 1`) so agentic tools like OpenCode can ingest large codebase contexts.
+- **Automatic OpenCode Connection:** Launches OpenCode pointing directly to `http://127.0.0.1:8081/v1`.
+
+```bash
+# Manage the background server
+sandwich-serve --server-only    # Start server in background without launching OpenCode
+sandwich-serve --status         # Check server health, active model, PID & context
+sandwich-serve --logs           # Tail live inference server logs
+sandwich-serve --stop           # Terminate background server cleanly
+```
+
+#### OpenCode Configuration (`~/.config/opencode/opencode.jsonc`)
+Connect OpenCode to Sandwich.cpp with Understory persistent memory:
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "sandwich/sandwich-local",
+  "providers": {
+    "sandwich": {
+      "name": "Sandwich.cpp",
+      "package": "@ai-sdk/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8081/v1",
+        "apiKey": "sandwich"
+      },
+      "models": {
+        "sandwich-local": {
+          "name": "Sandwich.cpp Local Engine",
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "understory": {
+        "type": "remote",
+        "url": "http://localhost:3800/mcp"
+      }
+    }
+  }
+}
+```
+
+### 2. Interactive Terminal CLI
 ```bash
 # Launch interactive chat with automatic hardware optimization
 ./build/bin/llama-cli \
@@ -311,7 +379,7 @@ A warning instead of this line means the cache fell back to baseline (see Tuning
   -c 32768
 ```
 
-### 2. OpenAI-Compatible API Server (`llama-server`)
+### 3. OpenAI-Compatible API Server (`llama-server`)
 ```bash
 # Run server on port 8081
 ./build/bin/llama-server \
@@ -321,7 +389,7 @@ A warning instead of this line means the cache fell back to baseline (see Tuning
   -c 32768
 ```
 
-### 3. Speculative Decoding with Drafter Model
+### 4. Speculative Decoding with Drafter Model
 Accelerate generation up to 1.5x by pairing a target model with an aligned drafter:
 ```bash
 ./build/bin/llama-server \
@@ -330,7 +398,7 @@ Accelerate generation up to 1.5x by pairing a target model with an aligned draft
   -ngl 16 -c 8192 --port 8081
 ```
 
-### 4. Querying the Server (curl / Python)
+### 5. Querying the Server (curl / Python)
 
 ```bash
 curl http://127.0.0.1:8081/v1/chat/completions \
@@ -489,6 +557,7 @@ Sandwich.cpp is built upon pioneering work across the local AI open-source commu
 
 - **Upstream Engine:** [`ggerganov/llama.cpp`](https://github.com/ggerganov/llama.cpp)
 - **Dynamic MoE Offload:** [`GenerelSchwerz/llama.cpp`](https://github.com/GenerelSchwerz/llama.cpp) (BeeLlama)
+- **MoE Expert Cache & Asynchronous Overlap:** [`thecodacus/llama.cpp`](https://github.com/thecodacus/llama.cpp) (Thecodacus)
 - **TurboQuant KV Cache:** [`TheTom/llama-cpp-turboquant`](https://github.com/TheTom/llama-cpp-turboquant)
 - **Modern MoE, FlashMLA & SOTA Quantization Insights:** [`ikawrakow/ik_llama.cpp`](https://github.com/ikawrakow/ik_llama.cpp) (I. Kawrakow)
 - **GUI Companion:** Pair Sandwich.cpp with **[Sandwich Deck](https://github.com/sandeepmuttvarpu-png/sandwich-deck)** for an ultra-lightweight LM Studio desktop experience.
