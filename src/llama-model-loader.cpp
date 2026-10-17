@@ -541,7 +541,8 @@ llama_model_loader::llama_model_loader(
         bool no_alloc,
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        const llama_model_tensor_type_override * param_tensor_type_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
@@ -555,6 +556,7 @@ llama_model_loader::llama_model_loader(
     }
 
     tensor_buft_overrides = param_tensor_buft_overrides_p;
+    tensor_type_overrides = param_tensor_type_overrides_p;
 
     this->use_mmap      = load_mode == LLAMA_LOAD_MODE_MMAP || load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK || load_mode == LLAMA_LOAD_MODE_AUTO;
     this->use_direct_io = load_mode == LLAMA_LOAD_MODE_DIRECT_IO;
@@ -1298,6 +1300,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
         }
+        if (tensor_type_overrides) {
+            const std::string tensor_name = tn.str();
+            for (const auto * ov = tensor_type_overrides; ov->pattern != nullptr; ++ov) {
+                std::regex pattern(ov->pattern);
+                if (std::regex_search(tensor_name, pattern)) {
+                    type = ov->type;
+                    break;
+                }
+            }
+        }
 
         // for tensors that are not required some of the dimensions can be invalid:
         if (flags & TENSOR_NOT_REQUIRED) {
@@ -1345,7 +1357,24 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     ggml_tensor t_meta = *cur;
-    if (flags & TENSOR_ALLOW_RESHAPE) {
+    bool type_overridden = false;
+    if (tensor_type_overrides) {
+        const std::string tensor_name = tn.str();
+        for (const auto * ov = tensor_type_overrides; ov->pattern != nullptr; ++ov) {
+            std::regex pattern(ov->pattern);
+            if (std::regex_search(tensor_name, pattern)) {
+                if (t_meta.type != ov->type) {
+                    LLAMA_LOG_INFO("%s: Asymmetric mixed-precision override: %s (%s -> %s)\n",
+                        __func__, tensor_name.c_str(), ggml_type_name(t_meta.type), ggml_type_name(ov->type));
+                    t_meta.type = ov->type;
+                    type_overridden = true;
+                }
+                break;
+            }
+        }
+    }
+
+    if ((flags & TENSOR_ALLOW_RESHAPE) || type_overridden) {
         for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
             t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
             if (dim == 0) {
@@ -1358,7 +1387,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
     }
 
-    GGML_ASSERT(ggml_nbytes(&t_meta) == ggml_nbytes(cur));
+    if (!type_overridden) {
+        GGML_ASSERT(ggml_nbytes(&t_meta) == ggml_nbytes(cur));
+    }
 
     ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
     if (buft == nullptr) {

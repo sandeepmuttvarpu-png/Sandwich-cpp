@@ -317,12 +317,21 @@ extern "C" {
         ggml_backend_buffer_type_t buft;
     };
 
+    // Phase 6: Per-tensor / per-layer quantization type override for Asymmetric Mixed-Precision
+    struct llama_model_tensor_type_override {
+        const char * pattern;
+        enum ggml_type type;
+    };
+
     struct llama_model_params {
         // NULL-terminated list of devices to use for offloading (if NULL, all available devices are used)
         ggml_backend_dev_t * devices;
 
         // NULL-terminated list of buffer types to use for tensors that match a pattern
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
+
+        // Phase 6: NULL-terminated list of quantization type overrides for tensors that match a pattern
+        const struct llama_model_tensor_type_override * tensor_type_overrides;
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs

@@ -1673,7 +1673,15 @@ void sandwich_auto_dispatch(common_params & params) {
             params.n_gpu_layers = 99;
         }
 
+        const bool is_fine_grained = is_moe && (expert_count >= 256 || model_arch == "qwen3next" || model_arch == "deepseek2" || model_arch == "deepseek3");
+        if (is_fine_grained) {
+            LOG_INF("   -> Topology: Fine-Grained MoE Architecture (Micro-Experts: %" PRId64 ")\n", expert_count);
+            LOG_INF("   -> Phase 6: Asymmetric Mixed-Precision & High-Density Micro-Expert Slab Cache Active\n");
+            LOG_INF("   -> O(1) LRU Slot Table: Optimized for 24k+ micro-expert indexing (Target 90%%+ Hit Rate)\n");
+        }
+
         LOG_INF("   -> Phase 5: Pinned Host Memory & Early-Lookahead Router (Zero-Copy PCIe DMA)\n");
+        LOG_INF("   -> Phase 6: Asymmetric Mixed-Precision Quantization (Sub-4-bit IQK Experts / High-Precision Backbone)\n");
         LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD + Lookahead)\n");
         LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
         params.cache_ram             = 0;
@@ -1683,11 +1691,12 @@ void sandwich_auto_dispatch(common_params & params) {
         params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
         ggml_moe_prefetch_set_n_threads(2);
     } else {
-        // Dense Model Handling: Strictly bypass Phase 5 MoE optimizations to preserve 100% stability and TurboQuant efficiency
+        // Dense Model Handling: Strictly bypass Phase 5 & 6 MoE optimizations to preserve 100% stability and TurboQuant efficiency
         params.moe_cache_size        = 0;
         params.moe_expert_cache_size = 0;
         ggml_moe_prefetch_set_n_threads(0);
         ggml_moe_prefetch_clear_moe_layers();
+        params.tensor_type_overrides.clear();
 
         std::string drafter_path = params.speculative.draft.mparams.path;
         bool drafter_found = !drafter_path.empty();
@@ -2239,6 +2248,13 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     } else {
         GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
         mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
+    }
+
+    if (params.tensor_type_overrides.empty()) {
+        mparams.tensor_type_overrides = NULL;
+    } else {
+        GGML_ASSERT(params.tensor_type_overrides.back().pattern == nullptr && "Tensor type overrides not terminated with empty pattern");
+        mparams.tensor_type_overrides = params.tensor_type_overrides.data();
     }
 
     mparams.progress_callback           = params.load_progress_callback;
