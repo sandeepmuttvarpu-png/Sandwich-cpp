@@ -2704,6 +2704,14 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
                 ggml_moe_prefetch_slice(exp_addr, expert_size);
             }
         }
+        // Phase 5: Trigger concurrent Early-Lookahead Router prefetch for Layer L+1
+        if (!st.ids_data.empty()) {
+            int il = 0;
+            if (src->name[0]) {
+                sscanf(src->name, "blk.%d.", &il);
+            }
+            ggml_moe_prefetch_lookahead_step(il, st.ids_data.data(), st.ids_data.size());
+        }
     }
 
     // group consecutive experts and copy them together

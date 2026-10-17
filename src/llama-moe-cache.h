@@ -34,6 +34,10 @@ public:
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
+    // Phase 5: Query pinned host memory DMA status and capacity
+    bool is_pinned_dma_enabled() const;
+    size_t pinned_buffer_size() const;
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
