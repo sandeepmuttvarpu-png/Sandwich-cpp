@@ -64,6 +64,24 @@
 | **TurboQuant** | 8K | 14 | `q8_0` / `q8_0` | 15.6 tk/s | 12.6 tk/s | Static offload |
 | **BeeLlama** | 8K | 14 | `q8_0` / `q8_0` | ❌ **CRASH** (`GGML_ASSERT`) | N/A | Missing buffer assertion patch |
 
+
+### D. GPT-OSS 120B-A3B MoE (`UD-Q4_K_XL`) — 58.7 GB (128 Experts / 36 Layers)
+
+Flagship 120B Mixture of Experts model evaluated on HP Victus 15 (RTX 5050 Laptop GPU 8GB VRAM + 24GB DDR5 Host RAM + NVMe swap).
+
+| Configuration | GPU Offload (`ngl`) | Memory Architecture & Offload Strategy | Prompt Speed (PP) | Decode Speed (TG) | Peak VRAM | Status |
+|---|---|---|---|---|---|---|
+| **ngl 0 (Pure CPU)** | 0 | Pure CPU inference (Host RAM + NVMe mmap paging) | **2.0 tk/s** | **1.4 tk/s** | 834 MiB | ✅ Passed (Host baseline) |
+| **ngl 12 (Partial Offload 1/3)** | 12 | 12 layers attention on GPU, 24 on CPU, MoE on CPU | **2.2 tk/s** | **1.4 tk/s** | 1,672 MiB | ✅ Passed |
+| **ngl 24 (Partial Offload 2/3)** | 24 | 24 layers attention on GPU, 12 on CPU, MoE on CPU | **0.4 tk/s** | **1.1 tk/s** | 1,922 MiB | ⚠️ Passed (Split paging overhead) |
+| **ngl 37 (Full Attention Offload)** | 37 | All 36 layers attention in VRAM, MoE weights on CPU | **2.1 tk/s** | **1.5 tk/s** 🥇 | 2,170 MiB | ⚡ Passed (Fastest sustained decode) |
+| **Sandwich-Auto (Dynamic MoE Cache)** | 37 | Attention on GPU + Dynamic VRAM cache for active experts | **2.6 tk/s** 🥇 | **1.4 tk/s** | 6,766 MiB | 🚀 Passed (Max VRAM usage, fastest prompt) |
+
+> **Key Observations:**
+> 1. **Massive Model Feasibility:** A 58.7 GB 120B-parameter MoE model runs stably and generates intelligible tokens at **1.4 – 1.5 tk/s** on an 8GB VRAM laptop GPU + 24GB host DDR5 memory without crashing or OOM.
+> 2. **Optimal Configuration:** Offloading all 36 attention backbone layers to GPU (`-ngl 37 -cmoe` or `--sandwich-auto`) offloads ~2.2 GB into VRAM, keeping compute-heavy self-attention on the CUDA cores while streaming expert weights.
+> 3. **Dynamic MoE Cache:** `--sandwich-auto` dynamically utilizes up to **6.77 GB VRAM** (85% of GPU capacity) to cache hot MoE expert slices, giving the fastest prompt processing at **2.6 – 2.7 tk/s**.
+
 ---
 
 ### 2. High-Speed Dense Models (< 8GB VRAM, 100% GPU Offload)
@@ -113,6 +131,7 @@ MODEL ARCHITECTURE              BEELLAMA         TURBOQUANT       SANDWICH.CPP (
 Nemotron 30B MoE (32K)          23.6 tk/s (8K)   19.5 tk/s        34.8 tk/s (+78.3%) 🥇
 Qwen3.6 35B MoE (8K)            25.1 tk/s        15.7 tk/s        33.4 tk/s (+33.1%) 🥇
 GLM-4.7 Flash 30B MoE (8K)      CRASH            16.2 tk/s        27.6 tk/s (+70.4%) 🥇
+GPT-OSS 120B MoE (59GB)         OOM / Crash      OOM / Crash      1.45 tk/s (2.6 tk/s prompt) 🥇
 Muse-Glimmer 30B Dense (8K)     2.5 tk/s         2.6 tk/s         2.56 tk/s (20.3 tk/s prompt)
 Qwen3.8 27B Dense (8K)          2.4 tk/s         2.6 tk/s         2.39 tk/s (12.2 tk/s prompt)
 Gemma-4 31B Dense (8K)          2.3 tk/s         2.1 tk/s         2.15 tk/s (5.7 tk/s prompt)
