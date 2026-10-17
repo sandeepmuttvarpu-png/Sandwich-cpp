@@ -141,6 +141,93 @@ public:
         });
     }
 
+    struct moe_layer_meta {
+        int32_t il;
+        const struct ggml_tensor * gate_inp;
+        const struct ggml_tensor * up_exps;
+        const struct ggml_tensor * gate_exps;
+        const struct ggml_tensor * down_exps;
+        int64_t n_expert;
+        int64_t n_expert_used;
+    };
+
+    void register_moe_layer(int32_t il,
+                            const struct ggml_tensor * gate_inp,
+                            const struct ggml_tensor * up_exps,
+                            const struct ggml_tensor * gate_exps,
+                            const struct ggml_tensor * down_exps,
+                            int64_t n_expert,
+                            int64_t n_expert_used) {
+        std::lock_guard<std::mutex> lock(m_layer_mutex);
+        for (auto & l : m_moe_layers) {
+            if (l.il == il) {
+                l = { il, gate_inp, up_exps, gate_exps, down_exps, n_expert, n_expert_used };
+                return;
+            }
+        }
+        m_moe_layers.push_back({ il, gate_inp, up_exps, gate_exps, down_exps, n_expert, n_expert_used });
+        std::sort(m_moe_layers.begin(), m_moe_layers.end(), [](const moe_layer_meta & a, const moe_layer_meta & b) {
+            return a.il < b.il;
+        });
+    }
+
+    void clear_moe_layers() {
+        std::lock_guard<std::mutex> lock(m_layer_mutex);
+        m_moe_layers.clear();
+    }
+
+    void lookahead_step(int32_t current_il, const int32_t * current_ids, size_t n_ids) {
+        if (!is_enabled()) return;
+        std::lock_guard<std::mutex> lock(m_layer_mutex);
+        if (m_moe_layers.empty() || !current_ids || n_ids == 0) return;
+
+        // Find next MoE layer after current_il
+        const moe_layer_meta * next_layer = nullptr;
+        for (const auto & l : m_moe_layers) {
+            if (l.il > current_il) {
+                next_layer = &l;
+                break;
+            }
+        }
+        if (!next_layer) {
+            // Autoregressive wrap-around to first MoE layer for token loop
+            next_layer = &m_moe_layers.front();
+        }
+
+        if (!next_layer || next_layer->n_expert <= 0) return;
+
+        const int64_t next_n_expert = next_layer->n_expert;
+        std::vector<int32_t> predicted_experts;
+        predicted_experts.reserve(n_ids);
+
+        for (size_t i = 0; i < n_ids; ++i) {
+            int32_t exp = current_ids[i];
+            if (exp >= 0) {
+                int32_t mapped_exp = (int32_t) ((int64_t) exp % next_n_expert);
+                if (std::find(predicted_experts.begin(), predicted_experts.end(), mapped_exp) == predicted_experts.end()) {
+                    predicted_experts.push_back(mapped_exp);
+                }
+            }
+        }
+
+        // Prefetch predicted expert slices across up_exps, gate_exps, and down_exps asynchronously
+        for (int32_t exp : predicted_experts) {
+            auto prefetch_expert_tensor = [this, exp](const struct ggml_tensor * t) {
+                if (!t || !t->data) return;
+                if (t->buffer && !ggml_backend_buffer_is_host(t->buffer)) return;
+                const size_t expert_size = t->nb[2];
+                void * addr = (uint8_t *) t->data + (size_t) exp * expert_size;
+                if (is_registered(addr, expert_size)) {
+                    enqueue(addr, expert_size, /* is_cold = */ false);
+                }
+            };
+
+            prefetch_expert_tensor(next_layer->up_exps);
+            prefetch_expert_tensor(next_layer->gate_exps);
+            prefetch_expert_tensor(next_layer->down_exps);
+        }
+    }
+
 private:
     prefetch_service() : m_running(false), m_stop_requested(false), m_active_workers(0), m_epoch(0) {}
     ~prefetch_service() {
@@ -213,6 +300,9 @@ private:
 
     mutable std::mutex m_registry_mutex;
     std::vector<mapped_region> m_mappings;
+
+    mutable std::mutex m_layer_mutex;
+    std::vector<moe_layer_meta> m_moe_layers;
 
     std::mutex m_queue_mutex;
     std::condition_variable m_queue_cv;
@@ -347,4 +437,24 @@ void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor * node, int ith) {
     if (ith == 0) {
         ggml_moe_prefetch_node(node);
     }
+}
+
+void ggml_moe_prefetch_register_moe_layer(
+    int32_t il,
+    const struct ggml_tensor * gate_inp,
+    const struct ggml_tensor * up_exps,
+    const struct ggml_tensor * gate_exps,
+    const struct ggml_tensor * down_exps,
+    int64_t n_expert,
+    int64_t n_expert_used) {
+    prefetch_service::instance().register_moe_layer(il, gate_inp, up_exps, gate_exps, down_exps, n_expert, n_expert_used);
+}
+
+void ggml_moe_prefetch_clear_moe_layers(void) {
+    prefetch_service::instance().clear_moe_layers();
+}
+
+void ggml_moe_prefetch_lookahead_step(int32_t current_il, const int32_t * current_ids, size_t n_ids) {
+    if (!current_ids || n_ids == 0) return;
+    prefetch_service::instance().lookahead_step(current_il, current_ids, n_ids);
 }

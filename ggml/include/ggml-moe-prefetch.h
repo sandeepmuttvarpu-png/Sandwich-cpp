@@ -35,6 +35,23 @@ void ggml_moe_prefetch_wait(const struct ggml_tensor * w);
 // Advise Linux kernel with MADV_COLD on the pages of tensor w after prompt processing
 void ggml_moe_prefetch_cold(const struct ggml_tensor * w);
 
+// Early-Lookahead Router: register layer descriptors for speculative expert prefetching
+void ggml_moe_prefetch_register_moe_layer(
+    int32_t il,
+    const struct ggml_tensor * gate_inp,
+    const struct ggml_tensor * up_exps,
+    const struct ggml_tensor * gate_exps,
+    const struct ggml_tensor * down_exps,
+    int64_t n_expert,
+    int64_t n_expert_used
+);
+
+void ggml_moe_prefetch_clear_moe_layers(void);
+
+// Triggers concurrent lookahead router evaluation and expert prefetching for Layer L+1
+// while the GPU is executing Layer L
+void ggml_moe_prefetch_lookahead_step(int32_t current_il, const int32_t * current_ids, size_t n_ids);
+
 // Kernel-entry hook invoked when evaluating MoE operations
 void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor * node, int ith);
 

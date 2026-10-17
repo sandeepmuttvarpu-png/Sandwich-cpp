@@ -1673,7 +1673,8 @@ void sandwich_auto_dispatch(common_params & params) {
             params.n_gpu_layers = 99;
         }
 
-        LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD)\n");
+        LOG_INF("   -> Phase 5: Pinned Host Memory & Early-Lookahead Router (Zero-Copy PCIe DMA)\n");
+        LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD + Lookahead)\n");
         LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
         params.cache_ram             = 0;
         params.cache_ram_mib         = 0;
@@ -1682,7 +1683,12 @@ void sandwich_auto_dispatch(common_params & params) {
         params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
         ggml_moe_prefetch_set_n_threads(2);
     } else {
-        // Dense Model Handling
+        // Dense Model Handling: Strictly bypass Phase 5 MoE optimizations to preserve 100% stability and TurboQuant efficiency
+        params.moe_cache_size        = 0;
+        params.moe_expert_cache_size = 0;
+        ggml_moe_prefetch_set_n_threads(0);
+        ggml_moe_prefetch_clear_moe_layers();
+
         std::string drafter_path = params.speculative.draft.mparams.path;
         bool drafter_found = !drafter_path.empty();
 

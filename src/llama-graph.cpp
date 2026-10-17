@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
+#include "ggml-moe-prefetch.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
 #include "llama-sampler.h"
@@ -2102,6 +2103,19 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
+
+    // Phase 5: Register layer in Early-Lookahead Router pipeline
+    if (ggml_moe_prefetch_enabled()) {
+        ggml_moe_prefetch_register_moe_layer(
+            il,
+            gate_inp,
+            up_exps ? up_exps : gate_up_exps,
+            gate_exps,
+            down_exps,
+            n_expert,
+            n_expert_used
+        );
+    }
 
     ggml_tensor * logits = nullptr;
 

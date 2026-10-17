@@ -5,8 +5,10 @@
 #include "llama-model.h"
 
 #include "ggml-cpp.h"
+#include "ggml-moe-prefetch.h"
 
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -152,6 +154,46 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
 }
 
 struct llama_moe_cache::impl {
+    // Phase 5: Pinned host memory ring buffer for true zero-copy PCIe DMA
+    struct moe_pinned_ring_buffer {
+        ggml_backend_buffer_ptr buf;
+        uint8_t * base = nullptr;
+        size_t size = 0;
+        size_t head = 0;
+
+        void init(ggml_backend_dev_t dev, size_t capacity) {
+            if (!dev || capacity == 0) return;
+            ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(dev);
+            if (host_buft) {
+                buf.reset(ggml_backend_buft_alloc_buffer(host_buft, capacity));
+                if (buf) {
+                    base = (uint8_t *) ggml_backend_buffer_get_base(buf.get());
+                    size = ggml_backend_buffer_get_size(buf.get());
+                    head = 0;
+                }
+            }
+        }
+
+        const void * stage(const void * src, size_t bytes) {
+            if (!base || bytes == 0 || bytes > size) {
+                return src; // fallback to unpinned host pointer if too large or unavailable
+            }
+            // 256-byte alignment for hardware PCIe packet efficiency
+            size_t aligned_head = (head + 255) & ~((size_t) 255);
+            if (aligned_head + bytes > size) {
+                aligned_head = 0; // wrap around in ring buffer
+            }
+            uint8_t * dst = base + aligned_head;
+            memcpy(dst, src, bytes);
+            head = aligned_head + bytes;
+            return dst;
+        }
+
+        bool is_pinned() const {
+            return base != nullptr && size > 0;
+        }
+    };
+
     // a GPU with its own budget and banks, it caches the layers assigned to it
     struct device {
         ggml_backend_t backend;
@@ -163,6 +205,9 @@ struct llama_moe_cache::impl {
         ggml_context_ptr ctx;
         ggml_backend_buffer_ptr buf;
         size_t buf_size = 0;
+
+        // Phase 5: Pinned DMA ring buffer for zero-copy PCIe expert weight streaming
+        moe_pinned_ring_buffer pinned_ring;
     };
 
     // layers of the same device with the same expert tensor layout share the banks and the LRU of a group
@@ -227,6 +272,14 @@ struct llama_moe_cache::impl {
                 auto & d = devices.emplace_back();
                 d.backend = backends[i];
                 d.buft    = bufts[i];
+                // Phase 5: Allocate pinned host ring buffer for zero-copy PCIe DMA
+                ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
+                const size_t ring_size = 64ULL * 1024 * 1024; // 64 MiB pinned DMA staging pool
+                d.pinned_ring.init(dev, ring_size);
+                if (d.pinned_ring.is_pinned()) {
+                    LLAMA_LOG_INFO("%s: %10s allocated %.2f MiB pinned host memory ring buffer for zero-copy PCIe DMA\n",
+                        __func__, ggml_backend_buft_name(d.buft), d.pinned_ring.size / 1024.0 / 1024.0);
+                }
             }
         }
         if (devices.empty()) {
@@ -586,10 +639,21 @@ struct llama_moe_cache::impl {
                 while (i + n < fills.size() && fills[i + n].expert == fills[i].expert + (int32_t) n && fills[i + n].slot == fills[i].slot + (int32_t) n) {
                     n++;
                 }
-                ggml_backend_tensor_set_async(backend, bank, (const uint8_t *) w->data + fills[i].expert*expert_size, fills[i].slot*expert_size, n*expert_size);
-                bytes += n*expert_size;
+                const size_t chunk_size = n * expert_size;
+                const void * host_src = (const uint8_t *) w->data + fills[i].expert*expert_size;
+
+                // Phase 5: Zero-copy DMA streaming via pinned host memory ring buffer
+                const void * dma_src = devices[g.id].pinned_ring.stage(host_src, chunk_size);
+
+                ggml_backend_tensor_set_async(backend, bank, dma_src, fills[i].slot*expert_size, chunk_size);
+                bytes += chunk_size;
                 i += n;
             }
+        }
+
+        // Phase 5: Trigger concurrent Early-Lookahead Router prefetch for Layer L+1 while GPU computes
+        if (ggml_moe_prefetch_enabled()) {
+            ggml_moe_prefetch_lookahead_step(il, ids.data(), ids.size());
         }
 
         stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
@@ -652,9 +716,29 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
         if (d.buf) {
             res[ggml_backend_buffer_get_type(d.buf.get())] += d.buf_size;
         }
+        if (d.pinned_ring.buf) {
+            res[ggml_backend_buffer_get_type(d.pinned_ring.buf.get())] += d.pinned_ring.size;
+        }
     }
     if (pimpl->buf_host) {
         res[ggml_backend_buffer_get_type(pimpl->buf_host.get())] += pimpl->buf_host_size;
     }
     return res;
+}
+
+bool llama_moe_cache::is_pinned_dma_enabled() const {
+    for (const auto & d : pimpl->devices) {
+        if (d.pinned_ring.is_pinned()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t llama_moe_cache::pinned_buffer_size() const {
+    size_t total = 0;
+    for (const auto & d : pimpl->devices) {
+        total += d.pinned_ring.size;
+    }
+    return total;
 }
