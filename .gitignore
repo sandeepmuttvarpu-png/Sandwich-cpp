@@ -54,6 +54,7 @@
 /tmp/
 /autogen-*.md
 /common/build-info.cpp
+/benchmark_results.json
 
 # Deprecated
 
