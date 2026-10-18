@@ -16,4 +16,5 @@ exec /home/sandeep/dev/sandwich/sandwich-cpp/build/bin/llama-server \
     --host "${HOST}" \
     --port "${PORT}" \
     -c "${CTX}" \
-    "$@"
+    -np "${PARALLEL:-1}" \
+    ${2+"${@:2}"}

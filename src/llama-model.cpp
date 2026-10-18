@@ -2031,38 +2031,47 @@ void llama_model_base::init_moe_expert_cache() {
         const char * slots_env = getenv("GGML_MOE_CACHE_SLOTS");
         n_slots = slots_env ? atoi(slots_env) : 0;
     }
-    if (profile_path == nullptr || profile_path[0] == '\0' || n_slots <= 0) {
+    if (n_slots <= 0) {
         return;
     }
 
     // routing profile: moe-trace CSV (pos,layer,id0,...), decode rows only
     std::map<int, std::map<int, int64_t>> freq; // layer -> expert -> count
-    {
+    if (profile_path != nullptr && profile_path[0] != '\0') {
         FILE * f = fopen(profile_path, "r");
         if (!f) {
-            LLAMA_LOG_WARN("%s: cannot open profile '%s' - expert cache disabled\n", __func__, profile_path);
-            return;
-        }
-        char line[4096];
-        while (fgets(line, sizeof(line), f)) {
-            char * p = line;
-            const long pos = strtol(p, &p, 10);
-            if (*p != ',' || pos < 0) { continue; }
-            p++;
-            const long il = strtol(p, &p, 10);
-            while (*p == ',') {
+            LLAMA_LOG_WARN("%s: cannot open profile '%s' - falling back to default top-%d expert packing\n", __func__, profile_path, n_slots);
+        } else {
+            char line[4096];
+            while (fgets(line, sizeof(line), f)) {
+                char * p = line;
+                const long pos = strtol(p, &p, 10);
+                if (*p != ',' || pos < 0) { continue; }
                 p++;
-                const long e = strtol(p, &p, 10);
-                if (e >= 0) {
-                    freq[(int) il][(int) e]++;
+                const long il = strtol(p, &p, 10);
+                while (*p == ',') {
+                    p++;
+                    const long e = strtol(p, &p, 10);
+                    if (e >= 0) {
+                        freq[(int) il][(int) e]++;
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
+
+    if (freq.empty()) {
+        LLAMA_LOG_INFO("%s: no routing profile provided; packing default top-%d experts per layer into VRAM\n", __func__, n_slots);
+        for (int il = 0; il < (int) layers.size(); il++) {
+            const auto & l = layers[il];
+            if (l.ffn_gate_exps) {
+                const int64_t n_expert = l.ffn_gate_exps->ne[2];
+                for (int64_t e = 0; e < n_expert; e++) {
+                    freq[il][(int) e] = n_expert - e; // linear descending rank: experts 0..S-1 prioritized
                 }
             }
         }
-        fclose(f);
-    }
-    if (freq.empty()) {
-        LLAMA_LOG_WARN("%s: profile '%s' has no decode rows - expert cache disabled\n", __func__, profile_path);
-        return;
     }
 
     ggml_backend_dev_t dev = nullptr;
