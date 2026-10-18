@@ -1632,24 +1632,45 @@ void sandwich_auto_dispatch(common_params & params) {
 
         const bool fits_in_vram = (total_free_vram > 0 && model_file_size > 0 && model_file_size + 1536ULL * 1024 * 1024 < total_free_vram);
 
-        if (fits_in_vram && params.moe_cache_size == 0) {
+        if (fits_in_vram && params.moe_cache_size == 0 && params.moe_cache_slots <= 0) {
             LOG_INF("   -> Model fits entirely within VRAM (%zu MiB vs %zu MiB free). Full GPU offload.\n",
                     (size_t)(model_file_size / (1024 * 1024)), total_free_vram / (1024 * 1024));
             params.n_gpu_layers = 99;
         } else {
             // Keep MoE expert weights in host CPU RAM and dynamically stage active experts via GPU VRAM cache
-            size_t free_vram_mib = total_free_vram / (1024 * 1024);
-            size_t moe_cache_mib = 2048;
-            if (free_vram_mib > 5120) {
-                moe_cache_mib = free_vram_mib - 3072;
-            } else if (free_vram_mib > 3072) {
-                moe_cache_mib = free_vram_mib - 2048;
-            } else if (free_vram_mib > 1024) {
-                moe_cache_mib = 1024;
+            // We support two caching paradigms:
+            // 1. Thecodacus Static Hot-Pack Cache (params.moe_cache_slots > 0): contiguous VRAM resident hot experts.
+            // 2. BeeLlama Dynamic Slab Cache (params.moe_cache_size > 0): dynamic runtime LRU slab.
+            // These two systems MUST remain strictly mutually exclusive to prevent double VRAM allocation and OOM.
+            if (params.moe_cache_slots <= 0 && params.moe_cache_size == 0) {
+                // Auto-configure thecodacus Dual-Path MoE Expert Cache by default
+                if (expert_count >= 256) {
+                    params.moe_cache_slots = 32; // High-density micro-experts (e.g. Qwen3.6-35B) ~2.8-3.1 GB pack
+                } else if (expert_count >= 64) {
+                    params.moe_cache_slots = 24; // Standard MoE (e.g. GLM-4.7 Flash, Nemotron 30B) ~2.4-2.8 GB pack
+                } else if (expert_count > 0) {
+                    params.moe_cache_slots = std::min<int32_t>(16, (int32_t)expert_count);
+                }
             }
 
-            if (params.moe_cache_size == 0) {
-                params.moe_cache_size = moe_cache_mib * 1024 * 1024;
+            if (params.moe_cache_slots > 0) {
+                params.moe_cache_size = 0; // Disable BeeLlama slab to prevent double allocation!
+                LOG_INF("   -> Thecodacus MoE Expert Cache: %d VRAM resident slots/layer (BeeLlama slab disabled)\n", params.moe_cache_slots);
+            } else {
+                size_t free_vram_mib = total_free_vram / (1024 * 1024);
+                size_t moe_cache_mib = 2048;
+                if (free_vram_mib > 5120) {
+                    moe_cache_mib = free_vram_mib - 3072;
+                } else if (free_vram_mib > 3072) {
+                    moe_cache_mib = free_vram_mib - 2048;
+                } else if (free_vram_mib > 1024) {
+                    moe_cache_mib = 1024;
+                }
+                if (params.moe_cache_size == 0) {
+                    params.moe_cache_size = moe_cache_mib * 1024 * 1024;
+                }
+                LOG_INF("   -> Modern MoE Cache: %zu MiB VRAM Expert Slab (O(1) LRU eviction)\n",
+                        params.moe_cache_size / (1024 * 1024));
             }
 
             // Ensure expert weights stay in host memory so GPU cache stages them
@@ -1668,8 +1689,6 @@ void sandwich_auto_dispatch(common_params & params) {
                 params.tensor_buft_overrides.push_back({nullptr, nullptr});
             }
 
-            LOG_INF("   -> Modern MoE Cache: %zu MiB VRAM Expert Slab (O(1) LRU eviction)\n",
-                    params.moe_cache_size / (1024 * 1024));
             params.n_gpu_layers = 99;
         }
 
@@ -1684,12 +1703,39 @@ void sandwich_auto_dispatch(common_params & params) {
         LOG_INF("   -> Phase 6: Asymmetric Mixed-Precision Quantization (Sub-4-bit IQK Experts / High-Precision Backbone)\n");
         LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD + Lookahead)\n");
         LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
-        params.cache_ram             = 0;
-        params.cache_ram_mib         = 0;
+        LOG_INF("   -> Persistent Prompt Prefix Caching: 4 GiB Host RAM buffer & slot common-prefix matching active\n");
+
+        if (params.cache_ram_mib <= 0) {
+            params.cache_ram_mib     = 4096; // 4 GiB Host RAM prefix cache for OpenCode/Cline/Continue fast reuse
+        }
+        params.cache_prompt          = true;
+        params.cache_idle_slots      = true;
+        if (params.slot_prompt_similarity <= 0.0f) {
+            params.slot_prompt_similarity = 0.5f;
+        }
+
         params.cache_type_k          = GGML_TYPE_TURBO4_0;
         params.cache_type_v          = GGML_TYPE_TURBO4_0;
         params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
         ggml_moe_prefetch_set_n_threads(2);
+
+        // Auto-discover routing profile CSV if present in model directory
+        if (params.moe_cache_profile.empty()) {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::path p(params.model.path);
+            fs::path mdir = p.parent_path();
+            if (fs::exists(mdir, ec) && fs::is_directory(mdir, ec)) {
+                for (const auto & entry : fs::directory_iterator(mdir, ec)) {
+                    if (entry.is_regular_file(ec) && entry.path().extension() == ".csv") {
+                        params.moe_cache_profile = entry.path().string();
+                        LOG_INF("   -> FOUND MoE Routing Profile in model directory: %s\n", params.moe_cache_profile.c_str());
+                        break;
+                    }
+                }
+            }
+        }
+        params.sched_async_cpu = true; // Overlap CPU cold-expert and GPU hot-expert computation
     } else {
         // Dense Model Handling: Strictly bypass Phase 5 & 6 MoE optimizations to preserve 100% stability and TurboQuant efficiency
         params.moe_cache_size        = 0;
