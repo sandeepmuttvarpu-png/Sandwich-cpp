@@ -6,11 +6,11 @@
     "topology": "MoE",
     "spec_mode": "Sandwich Hybrid (Auto MoE Cache)",
     "layers": "99",
-    "prompt_speed": 330.1,
-    "gen_speed": 216.3,
+    "prompt_speed": 354.3,
+    "gen_speed": 217.4,
     "hit_rate": "N/A",
     "peak_vram": 2324,
-    "total_time": 1.9133307933807373
+    "total_time": 2.2865796089172363
   },
   {
     "name": "GLM-4.7-Flash (MoE + FlashMLA)",
@@ -19,11 +19,11 @@
     "topology": "MoE",
     "spec_mode": "Sandwich Hybrid (Auto MoE Cache)",
     "layers": "99",
-    "prompt_speed": 8.3,
-    "gen_speed": 18.4,
-    "hit_rate": "59.7%",
+    "prompt_speed": 7.9,
+    "gen_speed": 15.6,
+    "hit_rate": "58.4%",
     "peak_vram": 7510,
-    "total_time": 19.35234045982361
+    "total_time": 15.596716165542603
   },
   {
     "name": "GLM-4.7-Flash (MoE + FlashMLA) [Hot-Only VRAM Draft]",
@@ -32,11 +32,11 @@
     "topology": "MoE",
     "spec_mode": "Hot-Only VRAM Fast Draft",
     "layers": "99",
-    "prompt_speed": 296.5,
-    "gen_speed": 82.9,
+    "prompt_speed": 311.0,
+    "gen_speed": 75.0,
     "hit_rate": "100.0% (VRAM)",
     "peak_vram": 7378,
-    "total_time": 2.933770179748535
+    "total_time": 3.202561616897583
   },
   {
     "name": "Qwen3.6-35B-A3B (MoE)",
@@ -45,11 +45,11 @@
     "topology": "MoE",
     "spec_mode": "Sandwich Hybrid (Auto MoE Cache)",
     "layers": "99",
-    "prompt_speed": 35.3,
-    "gen_speed": 26.4,
+    "prompt_speed": 32.4,
+    "gen_speed": 22.9,
     "hit_rate": "17.6%",
     "peak_vram": 3572,
-    "total_time": 9.515559196472168
+    "total_time": 10.333917617797852
   },
   {
     "name": "Qwen3.6-35B-A3B (MoE) [Hot-Only VRAM Draft]",
@@ -58,11 +58,11 @@
     "topology": "MoE",
     "spec_mode": "Hot-Only VRAM Fast Draft",
     "layers": "99",
-    "prompt_speed": 127.2,
-    "gen_speed": 83.8,
+    "prompt_speed": 116.2,
+    "gen_speed": 84.9,
     "hit_rate": "100.0% (VRAM)",
     "peak_vram": 3404,
-    "total_time": 2.0075318813323975
+    "total_time": 2.3510544300079346
   },
   {
     "name": "Nemotron-3-Nano-30B-A3B (MoE)",
@@ -71,11 +71,11 @@
     "topology": "MoE",
     "spec_mode": "Sandwich Hybrid (Auto MoE Cache)",
     "layers": "99",
-    "prompt_speed": 8.2,
-    "gen_speed": 14.5,
+    "prompt_speed": 4.7,
+    "gen_speed": 8.1,
     "hit_rate": "N/A",
     "peak_vram": 1996,
-    "total_time": 16.296992540359497
+    "total_time": 20.596844911575317
   },
   {
     "name": "Nemotron-3-Nano-30B-A3B (MoE) [Hot-Only VRAM Draft]",
@@ -84,11 +84,11 @@
     "topology": "MoE",
     "spec_mode": "Hot-Only VRAM Fast Draft",
     "layers": "99",
-    "prompt_speed": 24.7,
-    "gen_speed": 18.1,
+    "prompt_speed": 29.3,
+    "gen_speed": 21.7,
     "hit_rate": "100.0% (VRAM)",
     "peak_vram": 1996,
-    "total_time": 7.876071453094482
+    "total_time": 4.896994352340698
   },
   {
     "name": "NVIDIA-Nemotron-3-Nano-4B",
@@ -97,11 +97,11 @@
     "topology": "Dense",
     "spec_mode": "Zero-VRAM N-Gram",
     "layers": "All GPU",
-    "prompt_speed": 259.9,
-    "gen_speed": 69.8,
+    "prompt_speed": 273.6,
+    "gen_speed": 70.9,
     "hit_rate": "N/A",
     "peak_vram": 3654,
-    "total_time": 4.20244836807251
+    "total_time": 3.9652137756347656
   },
   {
     "name": "Dolphin-2.8-Mistral-7B",
@@ -110,11 +110,11 @@
     "topology": "Dense",
     "spec_mode": "Zero-VRAM N-Gram",
     "layers": "All GPU",
-    "prompt_speed": 512.1,
-    "gen_speed": 55.6,
+    "prompt_speed": 483.2,
+    "gen_speed": 56.0,
     "hit_rate": "N/A",
     "peak_vram": 4242,
-    "total_time": 3.8965466022491455
+    "total_time": 3.826204776763916
   },
   {
     "name": "Qwen3.8-27B (IQ3_XXS + DFlash2)",
@@ -122,12 +122,12 @@
     "success": true,
     "topology": "Dense",
     "spec_mode": "Spec Drafter (Qwen3.8-27B-DFlash2-Q4_K_M.gguf)",
-    "layers": "9",
-    "prompt_speed": 12.8,
-    "gen_speed": 1.9,
+    "layers": "21",
+    "prompt_speed": 15.4,
+    "gen_speed": 3.2,
     "hit_rate": "N/A",
-    "peak_vram": 4468,
-    "total_time": 30.318188667297363
+    "peak_vram": 6460,
+    "total_time": 29.78978443145752
   },
   {
     "name": "Muse-Glimmer-30B (Q4_K_M + DFlash2)",
@@ -135,12 +135,12 @@
     "success": true,
     "topology": "Dense",
     "spec_mode": "Spec Drafter (Muse-Glimmer-30B-DFlash2-Q4_K_M.gguf)",
-    "layers": "5",
-    "prompt_speed": 16.0,
-    "gen_speed": 5.6,
+    "layers": "9",
+    "prompt_speed": 17.3,
+    "gen_speed": 4.6,
     "hit_rate": "N/A",
-    "peak_vram": 4624,
-    "total_time": 22.225446939468384
+    "peak_vram": 5802,
+    "total_time": 26.42991590499878
   },
   {
     "name": "Gemma-4-31B-it (Q4_0 + MTP Assistant)",
@@ -148,12 +148,12 @@
     "success": true,
     "topology": "Dense",
     "spec_mode": "Spec Drafter (gemma-4-31b-qat-it-assistant-Q4_0-Q6emb.gguf)",
-    "layers": "5",
-    "prompt_speed": 5.6,
-    "gen_speed": 4.1,
+    "layers": "15",
+    "prompt_speed": 6.2,
+    "gen_speed": 4.8,
     "hit_rate": "N/A",
-    "peak_vram": 3000,
-    "total_time": 25.339028358459473
+    "peak_vram": 5884,
+    "total_time": 28.051408052444458
   },
   {
     "name": "Llama-3.3-70B-Instruct (IQ2_XXS + Llama-3.2-1B)",
@@ -161,12 +161,12 @@
     "success": true,
     "topology": "Dense",
     "spec_mode": "Spec Drafter (Llama-3.2-1B-Instruct-Q5_K_S.gguf)",
-    "layers": "18",
-    "prompt_speed": 23.7,
-    "gen_speed": 1.1,
+    "layers": "17",
+    "prompt_speed": 21.0,
+    "gen_speed": 0.9,
     "hit_rate": "N/A",
-    "peak_vram": 5840,
-    "total_time": 35.08155655860901
+    "peak_vram": 5620,
+    "total_time": 41.43868947029114
   },
   {
     "name": "Llama-3.2-1B-Instruct (Q5_K_S)",
@@ -175,11 +175,11 @@
     "topology": "Dense",
     "spec_mode": "Zero-VRAM N-Gram",
     "layers": "All GPU",
-    "prompt_speed": 2595.2,
-    "gen_speed": 206.0,
+    "prompt_speed": 2451.0,
+    "gen_speed": 209.9,
     "hit_rate": "N/A",
     "peak_vram": 1088,
-    "total_time": 1.5352859497070312
+    "total_time": 1.7589826583862305
   },
   {
     "name": "Nomic-Embed-Text-v1.5 (F16)",
@@ -188,11 +188,11 @@
     "topology": "Embedding",
     "spec_mode": "Direct Offload (-ngl 99)",
     "layers": "All GPU",
-    "prompt_speed": 16.69620046991979,
+    "prompt_speed": 26.021475156844954,
     "gen_speed": 0.0,
     "hit_rate": "N/A",
-    "peak_vram": 422,
-    "total_time": 0.718726396560669
+    "peak_vram": 430,
+    "total_time": 0.46115756034851074
   },
   {
     "name": "GPT-OSS-120B (128 Experts / 36 Layers)",
@@ -202,9 +202,9 @@
     "spec_mode": "Sandwich Hybrid (Auto MoE Cache)",
     "layers": "99",
     "prompt_speed": 2.0,
-    "gen_speed": 1.0,
+    "gen_speed": 0.9,
     "hit_rate": "N/A",
     "peak_vram": 2168,
-    "total_time": 88.36692190170288
+    "total_time": 93.15273523330688
   }
 ]

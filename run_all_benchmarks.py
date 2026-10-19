@@ -61,21 +61,21 @@ MODELS = [
         "name": "Qwen3.8-27B (IQ3_XXS + DFlash2)",
         "type": "Dense",
         "path": "/home/sandeep/ai-models/dense/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf",
-        "tokens": 32,
+        "tokens": 48,
         "timeout": 120
     },
     {
         "name": "Muse-Glimmer-30B (Q4_K_M + DFlash2)",
         "type": "Dense",
         "path": "/home/sandeep/ai-models/dense/Muse-Glimmer-30B-GGUF/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
-        "tokens": 32,
+        "tokens": 48,
         "timeout": 120
     },
     {
         "name": "Gemma-4-31B-it (Q4_0 + MTP Assistant)",
         "type": "Dense",
         "path": "/home/sandeep/ai-models/dense/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf",
-        "tokens": 32,
+        "tokens": 48,
         "timeout": 120
     },
     {
