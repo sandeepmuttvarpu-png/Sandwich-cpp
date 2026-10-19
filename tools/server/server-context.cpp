@@ -3293,6 +3293,12 @@ private:
                     n_keep += 1;
                 }
 
+                // Project Sandwich: Streaming Attention Sink Preservation (StreamingLLM)
+                // Guarantee that initial attention sink tokens are ALWAYS preserved during context shift,
+                // preventing attention collapse and enabling infinite, stable generation.
+                const int n_sinks = std::max(0, slot.task->params.n_sink_tokens);
+                n_keep = std::max(n_sinks, n_keep);
+
                 n_keep = std::min(slot.n_ctx - 4, n_keep);
 
                 const int n_left    = slot.prompt.n_tokens() - n_keep;
@@ -3301,7 +3307,7 @@ private:
                 // ref: https://github.com/ggml-org/llama.cpp/pull/24786
                 n_discard = std::clamp(n_discard, 0, std::max(0, n_left - 1));
 
-                SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+                SLT_WRN(slot, "🥪 [Project Sandwich] Streaming Attention Sink context shift: n_keep = %d (preserving %d sinks), n_left = %d, n_discard = %d\n", n_keep, n_sinks, n_left, n_discard);
 
                 slot.mem.seq_rm (slot.id, n_keep            , n_keep + n_discard);
                 slot.mem.seq_add(slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);

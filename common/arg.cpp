@@ -1696,6 +1696,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--sink-tokens", "--attn-sinks"}, "N",
+        string_format("number of initial attention sink tokens to permanently preserve during context shift (default: %d)", params.n_sink_tokens),
+        [](common_params & params, int value) {
+            params.n_sink_tokens = value;
+        }
+    ).set_env("LLAMA_ARG_SINK_TOKENS"));
+    add_opt(common_arg(
         {"--swa-full"},
         string_format("use full-size SWA cache (default: %s)\n"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)", params.swa_full ? "true" : "false"),

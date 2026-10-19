@@ -68,6 +68,7 @@ json task_params::to_json(bool only_metrics) const {
             {"max_tokens",                n_predict},
             {"n_predict",                 n_predict}, // TODO: deduplicate?
             {"n_keep",                    n_keep},
+            {"n_sink_tokens",             n_sink_tokens},
             {"n_discard",                 n_discard},
             {"ignore_eos",                sampling.ignore_eos},
             {"stream",                    stream},
@@ -122,6 +123,7 @@ json task_params::to_json(bool only_metrics) const {
         {"max_tokens",                n_predict},
         {"n_predict",                 n_predict}, // TODO: deduplicate?
         {"n_keep",                    n_keep},
+        {"n_sink_tokens",             n_sink_tokens},
         {"n_discard",                 n_discard},
         {"ignore_eos",                sampling.ignore_eos},
         {"stream",                    stream},
