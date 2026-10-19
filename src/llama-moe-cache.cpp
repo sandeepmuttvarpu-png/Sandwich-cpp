@@ -350,7 +350,7 @@ struct llama_moe_cache::impl {
         if (!split_by_free) {
             std::vector<float> cumulative(model.n_devices());
             std::vector<bool> eligible(model.n_devices(), false);
-            for (int i = 0; i < model.n_devices(); ++i) {
+            for (size_t i = 0; i < model.n_devices(); ++i) {
                 cumulative[i] = tensor_split[i];
             }
             for (const device & d : devices) {

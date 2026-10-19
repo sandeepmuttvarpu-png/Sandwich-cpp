@@ -2,6 +2,7 @@
 #include "common.h"
 #include "sampling.h"
 #include "speculative.h"
+#include "spec-tree.h"
 #include "log.h"
 #include "llama.h"
 
@@ -157,9 +158,150 @@ int main(int argc, char ** argv) {
 
     const auto t_enc_end = ggml_time_us();
 
+    common_spec_tree_stats stats_tree;
+
     const auto t_dec_start = ggml_time_us();
 
     while (true) {
+        if (params.spec_tree && ctx_dft != nullptr) {
+            // Phase 7: EAGLE3 / P-EAGLE Speculative Tree Decoding
+            int n_draft_max = (int) llama_n_ctx(ctx_tgt) - n_past - 2;
+            if (params.n_predict >= 0) {
+                n_draft_max = std::min(n_draft_max, params.n_predict - n_predict - 1);
+            }
+            if (n_draft_max <= 0) {
+                batch_tgt.clear();
+                batch_tgt.add(id_last, n_past++, seq_id, true);
+                llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
+                id_last = common_sampler_sample(smpl.get(), ctx_tgt, 0);
+                common_sampler_accept(smpl.get(), id_last, true);
+                prompt_tgt.push_back(id_last);
+                n_predict++;
+                const std::string token_str = common_token_to_piece(ctx_tgt, id_last);
+                LOG("%s", token_str.c_str());
+                if ((params.n_predict >= 0 && n_predict > params.n_predict) || llama_vocab_is_eog(vocab, id_last)) {
+                    break;
+                }
+                continue;
+            }
+
+            // 1. Build candidate tree on drafter / speculator
+            common_spec_tree tree;
+            llama_tokens spec_draft;
+            std::vector<std::vector<llama_token_data>> draft_q;
+
+            if (spec != nullptr) {
+                common_speculative_get_draft_params(spec, seq_id) = {
+                    /* .drafting   = */ true,
+                    /* .n_max      = */ std::min(n_draft_max, params.spec_tree_depth),
+                    /* .pos0       = */ n_past,
+                    /* .id_last    = */ id_last,
+                    /* .prompt     = */ &prompt_tgt,
+                    /* .result     = */ &spec_draft,
+                    /* .result_q   = */ &draft_q,
+                };
+                common_speculative_draft(spec);
+                if (!spec_draft.empty()) {
+                    tree = common_spec_tree_build_from_candidates(
+                        spec_draft, draft_q, n_past, params.spec_tree_depth, params.spec_tree_width, params.spec_tree_p_split);
+                }
+            }
+
+            if (tree.empty() && ctx_dft != nullptr) {
+                tree = common_spec_tree_build(
+                    ctx_dft, id_last, n_past, params.spec_tree_depth, params.spec_tree_width, params.spec_tree_p_split);
+            }
+
+            if (ctx_dft != nullptr) {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, n_past, -1);
+            }
+
+            if (tree.empty()) {
+                batch_tgt.clear();
+                batch_tgt.add(id_last, n_past++, seq_id, true);
+                llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
+                id_last = common_sampler_sample(smpl.get(), ctx_tgt, 0);
+                common_sampler_accept(smpl.get(), id_last, true);
+                prompt_tgt.push_back(id_last);
+                n_predict++;
+                stats_tree.n_forward_passes++;
+                stats_tree.n_emitted_total++;
+                const std::string token_str = common_token_to_piece(ctx_tgt, id_last);
+                LOG("%s", token_str.c_str());
+                if ((params.n_predict >= 0 && n_predict > params.n_predict) || llama_vocab_is_eog(vocab, id_last)) {
+                    break;
+                }
+                continue;
+            }
+
+            // 2. Batched target forward pass over root + all tree nodes with custom tree mask
+            batch_tgt.clear();
+            std::vector<int32_t> batch_indices;
+            batch_indices.push_back(batch_tgt.add(id_last, n_past, seq_id, true));
+
+            for (size_t i = 0; i < tree.size(); ++i) {
+                batch_indices.push_back(batch_tgt.add(tree.nodes[i].token, tree.nodes[i].pos, seq_id, true));
+            }
+
+            // Task 1: Generate custom 2D Tree-Causal Attention Mask and apply to target context
+            common_spec_tree_apply_to_context(ctx_tgt, tree, n_past);
+
+            llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
+
+            llama_clear_spec_tree(ctx_tgt);
+
+            if (spec != nullptr) {
+                common_speculative_process(spec, batch_tgt);
+            }
+
+            // 3. Tree Verification & Acceptance
+            auto tree_res = common_spec_tree_verify(tree, ctx_tgt, batch_indices, smpl.get());
+
+            // Telemetry
+            stats_tree.n_drafts_total   += tree.size();
+            stats_tree.n_accepted_total += tree_res.n_accepted;
+            stats_tree.n_forward_passes += 1;
+            stats_tree.n_emitted_total  += tree_res.total_tokens_emitted;
+
+            // 4. Prune KV cache for rejected branches
+            common_spec_tree_prune_kv(ctx_tgt, ctx_dft, tree, tree_res, seq_id, n_past);
+
+            if (spec != nullptr) {
+                common_speculative_accept(spec, seq_id, tree_res.n_accepted);
+            }
+
+            // 5. Emit accepted draft tokens and novel target token
+            std::vector<llama_token> ids = tree_res.accepted_tokens;
+            if (tree_res.target_token >= 0) {
+                ids.push_back(tree_res.target_token);
+            }
+
+            for (size_t i = 0; i < ids.size(); ++i) {
+                prompt_tgt.push_back(id_last);
+                id_last = ids[i];
+                if (llama_vocab_is_eog(vocab, id_last)) {
+                    has_eos = true;
+                    break;
+                }
+                const std::string token_str = common_token_to_piece(ctx_tgt, id_last);
+                if (params.use_color && i < tree_res.accepted_tokens.size()) {
+                    LOG("\u001b[32m%s\u001b[0m", token_str.c_str());
+                } else {
+                    LOG("%s", token_str.c_str());
+                }
+            }
+
+            n_past    += tree_res.n_accepted + 1;
+            n_drafted += (int)tree.size();
+            n_accept  += tree_res.n_accepted;
+            n_predict += tree_res.total_tokens_emitted;
+
+            if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
+                break;
+            }
+            continue;
+        }
+
         // generate or reuse draft tokens
         //
         // this is the most important part of the speculation. the more probable tokens that are provided here
@@ -354,7 +496,22 @@ int main(int argc, char ** argv) {
     LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
-    LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
+    LOG_INF("accept    = %.3f%%\n", n_drafted > 0 ? 100.0f * n_accept / n_drafted : 0.0f);
+
+    if (params.spec_tree) {
+        LOG_INF("\n");
+        LOG_INF("=================================================================\n");
+        LOG_INF("🥪 Phase 7: EAGLE3 / P-EAGLE Speculative Tree Decoding Telemetry\n");
+        LOG_INF("=================================================================\n");
+        LOG_INF("  Tree Topology:              depth=%d, width=%d\n", params.spec_tree_depth, params.spec_tree_width);
+        LOG_INF("  Target Forward Passes:      %" PRIu64 "\n", stats_tree.n_forward_passes);
+        LOG_INF("  Draft Candidates Proposed:  %" PRIu64 "\n", stats_tree.n_drafts_total);
+        LOG_INF("  Draft Candidates Accepted:  %" PRIu64 "\n", stats_tree.n_accepted_total);
+        LOG_INF("  Total Tokens Emitted:       %" PRIu64 "\n", stats_tree.n_emitted_total);
+        LOG_INF("  Mean Accepted Length / Pass:\033[1;32m %6.2f tokens/pass\033[0m\n", stats_tree.tokens_per_pass());
+        LOG_INF("  Tree Draft Acceptance Rate: \033[1;36m %6.2f%%\033[0m\n", 100.0 * stats_tree.acceptance_rate());
+        LOG_INF("=================================================================\n");
+    }
 
     LOG_INF("\n");
     LOG_INF("draft:\n\n");

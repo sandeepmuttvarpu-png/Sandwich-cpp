@@ -4225,6 +4225,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.n_min = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
+
+    // Phase 7: EAGLE3 / P-EAGLE Speculative Tree Decoding
+    add_opt(common_arg(
+        {"--spec-tree"},
+        "enable EAGLE3 / P-EAGLE speculative tree decoding (amortizes target forward pass across candidate tree)",
+        [](common_params & params) {
+            params.spec_tree = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE"));
+    add_opt(common_arg(
+        {"--no-spec-tree"},
+        "disable speculative tree decoding (use linear drafting)",
+        [](common_params & params) {
+            params.spec_tree = false;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-tree-depth"}, "N",
+        string_format("maximum depth of speculative candidate tree (default: %d)", params.spec_tree_depth),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 8) {
+                throw std::invalid_argument("spec-tree-depth must be between 1 and 8 inclusive");
+            }
+            params.spec_tree_depth = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE_DEPTH"));
+    add_opt(common_arg(
+        {"--spec-tree-width"}, "N",
+        string_format("maximum branching width per node for speculative tree (default: %d)", params.spec_tree_width),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 8) {
+                throw std::invalid_argument("spec-tree-width must be between 1 and 8 inclusive");
+            }
+            params.spec_tree_width = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE_WIDTH"));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
