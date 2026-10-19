@@ -816,6 +816,10 @@ struct llama_model {
     virtual void load_arch_tensors(llama_model_loader & ml) = 0;
     virtual std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const = 0;
 
+    virtual bool has_moe_expert_cache() const { return false; }
+    virtual bool has_moe_cache_profile() const { return false; }
+    virtual void repack_moe_expert_cache(const std::map<int, std::map<int, int64_t>> & /*freq*/) {}
+
 protected:
     llama_model_params params;
 
@@ -877,6 +881,13 @@ struct llama_model_base : public llama_model {
     // GGML_MOE_CACHE_PROFILE + GGML_MOE_CACHE_SLOTS: build GPU-resident hot
     // expert packs for CPU-offloaded MoE layers (see llama_layer::*_exps_hot)
     void init_moe_expert_cache();
+    void repack_moe_expert_cache(const std::map<int, std::map<int, int64_t>> & freq) override;
+    bool has_moe_expert_cache() const override { return m_has_moe_expert_cache; }
+    bool has_moe_cache_profile() const override { return m_has_moe_cache_profile; }
+
+    bool m_has_moe_cache_profile = false;
+    bool m_has_moe_expert_cache  = false;
+    std::vector<int> m_pack_layers;
 
     // model must define these
     void load_arch_hparams(llama_model_loader & ml) override = 0;

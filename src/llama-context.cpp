@@ -11,6 +11,7 @@
 #include "llama-model.h"
 #include "llama-moe-cache.h"
 #include "ggml-moe-prefetch.h"
+#include "sandwich-telemetry.h"
 #include "llama-ext.h"
 #include "llama-sampler.h"
 #include "llama.h"
@@ -2652,6 +2653,38 @@ ggml_status llama_context::graph_compute(
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
 
+    // Sandwich Online Warm-Up Auto-Tuning:
+    // When no offline CSV profile was provided and cache hit rate is low after warm-up,
+    // re-pack VRAM slots with empirically discovered hot experts!
+    if (!model.has_moe_cache_profile() && model.has_moe_expert_cache() && !m_warmup_repacked) {
+        sandwich_telemetry_increment_warmup_tokens();
+        const auto stats = sandwich_telemetry_get_stats();
+        if (stats.total_evals >= 500 && stats.hit_rate_pct < 65.0) {
+            std::map<int, std::map<int, int64_t>> live_freq;
+            for (int il = 0; il < (int) model.layers.size(); il++) {
+                const auto & l = model.layers[il];
+                if (!l.ffn_gate_exps) continue;
+                const int64_t n_expert = l.ffn_gate_exps->ne[2];
+                for (int64_t e = 0; e < n_expert; e++) {
+                    int64_t count = sandwich_telemetry_get_expert_freq(il, e);
+                    if (count > 0) {
+                        live_freq[il][e] = count;
+                    }
+                }
+            }
+            if (!live_freq.empty()) {
+                ggml_backend_sched_synchronize(sched.get());
+                const int64_t t_start = ggml_time_us();
+                const_cast<llama_model &>(model).repack_moe_expert_cache(live_freq);
+                const int64_t t_duration_ms = (ggml_time_us() - t_start) / 1000;
+                fprintf(stderr, "\n🥪 [Project Sandwich] Online Warm-Up Auto-Tuning: Re-packed %zu layers into VRAM in %lld ms (pre-tuning hit rate: %.2f%%)!\n\n",
+                        live_freq.size(), (long long) t_duration_ms, stats.hit_rate_pct);
+                sandwich_telemetry_reset();
+                m_warmup_repacked = true;
+            }
+        }
+    }
+
     return status;
 }
 
@@ -4585,10 +4618,14 @@ void llama_perf_context_print(const llama_context * ctx) {
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
     LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
+
+    // Sandwich MoE Cache & Runtime Telemetry
+    sandwich_telemetry_print();
 }
 
 void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
+    sandwich_telemetry_reset();
 }
 
 //

@@ -2296,6 +2296,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         auto build_pack_chain = [&](ggml_tensor * w_gate, ggml_tensor * w_up, ggml_tensor * w_down, ggml_tensor * ids) {
             ggml_tensor * gate = ggml_mul_mat_id(ctx0, w_gate, cur, ids);
             gate->op_params[0] = 1; // ids may contain -1
+            gate->op_params[1] = 1; // mark as gate matrix for sandwich telemetry
+            gate->op_params[2] = il; // MoE block layer index
             ggml_tensor * up_p = ggml_mul_mat_id(ctx0, w_up, cur, ids);
             up_p->op_params[0] = 1;
             ggml_tensor * act = ggml_swiglu_split(ctx0, gate, up_p);

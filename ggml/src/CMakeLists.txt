@@ -209,6 +209,8 @@ add_library(ggml-base
             ggml-turbo-quant.c
             ../include/ggml-moe-prefetch.h
             ggml-moe-prefetch.cpp
+            ../include/sandwich-telemetry.h
+            sandwich-telemetry.cpp
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
