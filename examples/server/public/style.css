@@ -600,7 +600,7 @@ html, body {
   font-size: 0.96rem;
   color: var(--text-secondary);
   line-height: 1.6;
-  margin-bottom: 32px;
+  margin-bottom: 0;
 }
 
 .hero-features {

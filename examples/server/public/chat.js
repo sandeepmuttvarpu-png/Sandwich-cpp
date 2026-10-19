@@ -396,23 +396,6 @@
         <span class="hero-badge">Local Workstation</span>
       </div>
       <p class="hero-subtitle">High-performance local inference powered by O(1) LRU MoE caching, FlashMLA, and TurboQuant compression.</p>
-      <div class="hero-features">
-        <div class="feature-card">
-          <div class="feature-icon">⚡</div>
-          <h3>Dynamic MoE Caching</h3>
-          <p>Execute 30B–35B MoE architectures locally on consumer GPUs without PCIe stalls.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🚀</div>
-          <h3>Speculative Decoding</h3>
-          <p>Paired recurrent drafters for up to 3.5× accelerated token generation.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">💾</div>
-          <h3>TurboQuant KV</h3>
-          <p>75% smaller KV cache footprint with Walsh-Hadamard transform acceleration.</p>
-        </div>
-      </div>
     `;
     chatHistory.appendChild(hero);
   }
