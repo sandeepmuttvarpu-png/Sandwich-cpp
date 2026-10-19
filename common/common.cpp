@@ -2347,6 +2347,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
     cparams.sched_async_cpu   = params.sched_async_cpu;
+    cparams.moe_hot_only      = params.moe_hot_only;
     cparams.swa_full          = params.swa_full;
     cparams.kv_unified        = params.kv_unified;
 

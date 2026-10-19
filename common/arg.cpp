@@ -3003,6 +3003,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--moe-hot-only"},
+        "Project Sandwich: skip CPU cold experts and run hot VRAM-resident experts only for high-speed speculative drafting",
+        [](common_params & params) {
+            params.moe_hot_only = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_ONLY"));
+    add_opt(common_arg(
         {"--lora"}, "FNAME",
         "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
