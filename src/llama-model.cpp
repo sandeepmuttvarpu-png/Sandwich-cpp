@@ -2061,6 +2061,8 @@ void llama_model_base::init_moe_expert_cache() {
         }
     }
 
+    m_has_moe_cache_profile = (profile_path != nullptr && profile_path[0] != '\0' && !freq.empty());
+
     if (freq.empty()) {
         LLAMA_LOG_INFO("%s: no routing profile provided; packing default top-%d experts per layer into VRAM\n", __func__, n_slots);
         for (int il = 0; il < (int) layers.size(); il++) {
@@ -2097,6 +2099,9 @@ void llama_model_base::init_moe_expert_cache() {
         LLAMA_LOG_INFO("%s: no CPU-resident MoE layers - expert cache not built\n", __func__);
         return;
     }
+
+    m_pack_layers = pack_layers;
+    m_has_moe_expert_cache = !m_pack_layers.empty();
 
     ggml_init_params ctx_params = {
         /*.mem_size   =*/ (5*pack_layers.size() + 1)*ggml_tensor_overhead(),
@@ -2140,22 +2145,55 @@ void llama_model_base::init_moe_expert_cache() {
     // matmuls (and a per-layer weight copy) onto the CPU
     ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    // fill packs (expert dim is outermost: one contiguous slab per expert)
+    pimpl->ctxs_bufs.emplace_back(ggml_context_ptr{ctx}, std::vector<ggml_backend_buffer_ptr>{});
+    pimpl->ctxs_bufs.back().second.emplace_back(buf);
+
+    repack_moe_expert_cache(freq);
+
+    LLAMA_LOG_INFO("%s: expert cache initialized: %zu layers x %d slots on %s\n",
+        __func__, pack_layers.size(), n_slots, ggml_backend_buft_name(buft));
+}
+
+void llama_model_base::repack_moe_expert_cache(const std::map<int, std::map<int, int64_t>> & freq) {
+    if (m_pack_layers.empty()) {
+        return;
+    }
+
     std::vector<uint8_t> slab;
     std::vector<int32_t> map_hot, map_cold;
     size_t total_bytes = 0;
-    for (int il : pack_layers) {
+    const int64_t t_start = ggml_time_us();
+
+    for (int il : m_pack_layers) {
         auto & l = layers[il];
+        if (!l.ffn_gate_exps || !l.ffn_gate_exps_hot) continue;
+
         const int64_t n_expert = l.ffn_gate_exps->ne[2];
         const int64_t S = l.ffn_gate_exps_hot->ne[2];
 
         std::vector<std::pair<int64_t, int32_t>> ranked; // (-count, expert)
-        for (const auto & [e, c] : freq[il]) {
-            if (e < n_expert) {
-                ranked.push_back({-c, e});
+        auto it = freq.find(il);
+        if (it != freq.end()) {
+            for (const auto & [e, c] : it->second) {
+                if (e < n_expert) {
+                    ranked.push_back({-c, e});
+                }
             }
         }
         std::sort(ranked.begin(), ranked.end());
+
+        // Fallback for remaining slots if ranked experts count is less than S
+        if ((int64_t) ranked.size() < S) {
+            std::vector<bool> included(n_expert, false);
+            for (const auto & p : ranked) {
+                included[p.second] = true;
+            }
+            for (int64_t e = 0; e < n_expert && (int64_t) ranked.size() < S; e++) {
+                if (!included[e]) {
+                    ranked.push_back({0, (int32_t) e});
+                }
+            }
+        }
 
         map_hot.assign(n_expert, -1);
         map_cold.resize(n_expert);
@@ -2180,11 +2218,9 @@ void llama_model_base::init_moe_expert_cache() {
         ggml_backend_tensor_set(l.moe_map_cold, map_cold.data(), 0, n_expert*sizeof(int32_t));
     }
 
-    pimpl->ctxs_bufs.emplace_back(ggml_context_ptr{ctx}, std::vector<ggml_backend_buffer_ptr>{});
-    pimpl->ctxs_bufs.back().second.emplace_back(buf);
-
-    LLAMA_LOG_INFO("%s: expert cache: %zu layers x %d slots, %.2f MiB uploaded to %s\n",
-        __func__, pack_layers.size(), n_slots, total_bytes/1024.0/1024.0, ggml_backend_buft_name(buft));
+    const int64_t dt_ms = (ggml_time_us() - t_start) / 1000;
+    LLAMA_LOG_INFO("%s: packed %zu layers (%.2f MiB) in %lld ms\n",
+        __func__, m_pack_layers.size(), total_bytes/1024.0/1024.0, (long long) dt_ms);
 }
 
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {

@@ -5,6 +5,7 @@
 #include "base64.hpp"
 #include "log.h"
 #include "console.h"
+#include "sandwich-telemetry.h"
 
 #include "json.h"
 
@@ -657,6 +658,7 @@ int cli_context::run() {
                 timings.prompt_per_second,
                 timings.predicted_per_second
             ));
+            sandwich_telemetry_print();
         }
 
         if (params.single_turn) {

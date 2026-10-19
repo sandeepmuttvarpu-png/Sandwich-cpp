@@ -16,6 +16,7 @@
 #include "ggml.h"
 #include "common.h"
 #include "tiled/tiled.h"
+#include "sandwich-telemetry.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1676,6 +1677,11 @@ static void ggml_compute_forward_mul_mat_id(
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
+        const bool track_telemetry = (dst->op_params[0] == 1 && dst->op_params[1] == 1);
+        uint64_t hot_hits_count = 0;
+        uint64_t cold_miss_count = 0;
+        const int32_t il = dst->op_params[2];
+
         // group rows by src0 matrix
         for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
             for (int id = 0; id < n_ids; ++id) {
@@ -1685,6 +1691,9 @@ static void ggml_compute_forward_mul_mat_id(
                 // split): contribute a zero row so the pack outputs merge additively
                 if (i02 < 0) {
                     memset((char *) dst->data + id*dst->nb[1] + iid1*dst->nb[2], 0, dst->ne[0]*sizeof(float));
+                    if (track_telemetry) {
+                        hot_hits_count++;
+                    }
                     continue;
                 }
 
@@ -1692,6 +1701,19 @@ static void ggml_compute_forward_mul_mat_id(
 
                 MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
                 matrix_row_counts[i02] += 1;
+                if (track_telemetry) {
+                    cold_miss_count++;
+                    sandwich_telemetry_record_expert(il, i02);
+                }
+            }
+        }
+
+        if (track_telemetry) {
+            if (hot_hits_count > 0) {
+                sandwich_telemetry_record_hits(hot_hits_count);
+            }
+            if (cold_miss_count > 0) {
+                sandwich_telemetry_record_misses(cold_miss_count);
             }
         }
     }
