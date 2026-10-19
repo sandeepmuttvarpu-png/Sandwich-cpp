@@ -2224,9 +2224,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (use_moe_packs) {
         ggml_tensor * ids_flat = ggml_cont_1d(ctx0, selected_experts, n_expert_used*n_tokens); // topk ids are a strided view
         ids_hot  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, moe_cache->moe_map_hot,  ids_flat), n_expert_used, n_tokens);
-        ids_cold = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, moe_cache->moe_map_cold, ids_flat), n_expert_used, n_tokens);
         cb(ids_hot,  "ffn_moe_ids_hot",  il);
-        cb(ids_cold, "ffn_moe_ids_cold", il);
+        if (!cparams.moe_hot_only) {
+            ids_cold = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, moe_cache->moe_map_cold, ids_flat), n_expert_used, n_tokens);
+            cb(ids_cold, "ffn_moe_ids_cold", il);
+        }
     }
 
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
@@ -2312,19 +2314,25 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         // hot chain (which has no CPU inputs) runs concurrently on the GPU.
         // pinning the merge to CPU keeps it out of the hot split so the hot
         // split stays free of cross-backend inputs.
-        ggml_tensor * cold = build_pack_chain(gate_exps, up_exps, down_exps, ids_cold);
-        cb(cold, "ffn_moe_down_cold", il);
-
         ggml_tensor * hot = build_pack_chain(moe_cache->ffn_gate_exps_hot, moe_cache->ffn_up_exps_hot, moe_cache->ffn_down_exps_hot, ids_hot);
         cb(hot, "ffn_moe_down_hot", il);
 
-        experts = ggml_add(ctx0, cold, hot);
-        cb(experts, "ffn_moe_down", il);
-        // decode-size batches only: for large (prefill) batches the CPU merge
-        // and its per-layer activation copies cost more than the overlap hides
-        if (cparams.sched_async_cpu && n_tokens <= 8) {
-            ggml_backend_sched_set_tensor_backend(sched, experts, backend_cpu);
+        if (cparams.moe_hot_only) {
+            // Project Sandwich: Hot-Only Speculative Fast Drafting
+            // Completely bypass CPU cold chain, DRAM bandwidth, and PCIe transfers.
+            experts = hot;
+        } else {
+            ggml_tensor * cold = build_pack_chain(gate_exps, up_exps, down_exps, ids_cold);
+            cb(cold, "ffn_moe_down_cold", il);
+
+            experts = ggml_add(ctx0, cold, hot);
+            // decode-size batches only: for large (prefill) batches the CPU merge
+            // and its per-layer activation copies cost more than the overlap hides
+            if (cparams.sched_async_cpu && n_tokens <= 8) {
+                ggml_backend_sched_set_tensor_backend(sched, experts, backend_cpu);
+            }
         }
+        cb(experts, "ffn_moe_down", il);
     } else if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
         ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff*2, n_expert_used, n_tokens]

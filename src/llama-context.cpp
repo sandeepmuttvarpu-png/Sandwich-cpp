@@ -125,6 +125,7 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.sched_async_cpu         = params.sched_async_cpu;
+    cparams.moe_hot_only            = params.moe_hot_only;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
@@ -3951,6 +3952,7 @@ llama_context_params llama_context_default_params() {
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.sched_async_cpu             =*/ true,
+        /*.moe_hot_only                =*/ false,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
