@@ -575,14 +575,16 @@ int llama_completion(int argc, char ** argv) {
                         break;
                     }
 
-                    const int n_left    = n_past - params.n_keep;
+                    const int n_sinks = std::max(0, params.n_sink_tokens);
+                    const int effective_keep = std::max(n_sinks, params.n_keep);
+                    const int n_left    = n_past - effective_keep;
                     const int n_discard = n_left/2;
 
-                    LOG_DBG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
-                            n_past, n_left, n_ctx, params.n_keep, n_discard);
+                    LOG_DBG("🥪 [Project Sandwich] Streaming Attention Sink context swap: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d (sinks = %d), n_discard = %d\n",
+                            n_past, n_left, n_ctx, effective_keep, n_sinks, n_discard);
 
-                    llama_memory_seq_rm (mem, 0, params.n_keep            , params.n_keep + n_discard);
-                    llama_memory_seq_add(mem, 0, params.n_keep + n_discard, n_past, -n_discard);
+                    llama_memory_seq_rm (mem, 0, effective_keep            , effective_keep + n_discard);
+                    llama_memory_seq_add(mem, 0, effective_keep + n_discard, n_past, -n_discard);
 
                     n_past -= n_discard;
 
