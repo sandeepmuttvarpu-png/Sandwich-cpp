@@ -1756,10 +1756,21 @@ void sandwich_auto_dispatch(common_params & params) {
         }
 
         if (drafter_found) {
-            // CAPPED VRAM PROFILE: 6.0 GB Cap for Main Model, Drafter 100% in VRAM
+            // Dynamic VRAM Profile: compute exact budget from actual drafter weight footprint
+            std::error_code fs_ec;
+            size_t drafter_bytes = std::filesystem::file_size(drafter_path, fs_ec);
+            int64_t drafter_mb = (!fs_ec && drafter_bytes > 0) ? (int64_t)(drafter_bytes / (1024ULL * 1024ULL)) : 1000;
+
             bool is_assistant = (drafter_path.find("assistant") != std::string::npos);
             bool is_dflash = (drafter_path.find("dflash") != std::string::npos || drafter_path.find("DFlash") != std::string::npos);
-            int64_t main_budget_mb = (is_assistant || is_dflash) ? (vocab_size > 150000 ? 3500 : 5000) : (vocab_size > 150000 ? 5000 : 6000);
+
+            // Compute main model headroom: target total usage <= 7100 MB on 8GB GPU
+            // For DFlash2, gallocr allocates an extra draft evaluation pipeline (~650 MB)
+            int64_t drafter_headroom_mb = drafter_mb + (is_dflash ? 650 : (is_assistant ? 350 : 450));
+            int64_t main_budget_mb = 7100 - drafter_headroom_mb;
+            if (main_budget_mb < 3500) main_budget_mb = 3500;
+            if (main_budget_mb > 6400) main_budget_mb = 6400;
+
             int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, main_budget_mb);
 
             LOG_INF("   -> FOUND Compatible Drafter: %s\n", drafter_path.c_str());
