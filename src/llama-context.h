@@ -124,6 +124,15 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
+    // Phase 7: EAGLE3 / Tree Speculative Decoding custom attention mask
+    void set_tree_mask(const float * mask, int64_t n_tokens, int64_t n_kv);
+    void clear_tree_mask();
+    void apply_tree_mask(ggml_cgraph * gf, const llama_ubatch & ubatch);
+
+    void set_spec_tree(const int32_t * parent_indices, int64_t n_tree_nodes, int64_t n_prompt);
+    void clear_spec_tree();
+    void apply_spec_tree_mask(ggml_cgraph * gf, const llama_ubatch & ubatch);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -413,6 +422,14 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
+
+    // Phase 7: EAGLE3 / Tree Speculative Decoding custom attention mask
+    bool has_custom_tree_mask = false;
+    std::vector<float> custom_tree_mask;
+
+    bool has_spec_tree = false;
+    std::vector<int32_t> spec_tree_parents;
+    int64_t spec_tree_n_prompt = 0;
 
     // perf
     mutable int64_t t_start_us  = 0;

@@ -1809,6 +1809,14 @@ void sandwich_auto_dispatch(common_params & params) {
             params.speculative.draft.p_min        = 0.75f;
             params.speculative.draft.cache_type_k = GGML_TYPE_TURBO4_0;
             params.speculative.draft.cache_type_v = GGML_TYPE_TURBO4_0;
+
+            // Phase 7: Auto-enable EAGLE3 / P-EAGLE Speculative Tree Decoding for dense targets
+            params.spec_tree         = true;
+            params.spec_tree_depth   = 3;
+            params.spec_tree_width   = 2;
+            params.spec_tree_p_split = 0.15f;
+            LOG_INF("   -> Phase 7: EAGLE3 / P-EAGLE Speculative Tree Decoding ACTIVE (--spec-tree, depth=%d, width=%d)\n",
+                    params.spec_tree_depth, params.spec_tree_width);
         } else {
             // UNCAPPED VRAM PROFILE: 7.2 GB Cap Lifted + Zero-VRAM N-Gram Lookup Speculation
             int32_t optimal_layers = sandwich_calculate_optimal_layers(gguf_ctx.get(), params.model.path, model_arch, 7200);

@@ -607,6 +607,12 @@ struct common_params {
     bool sandwich_auto = false; // Project Sandwich architecture-aware dispatch
     bool parallel_decoding = false; // enable parallel decoding for dense models (Project Sandwich / thecodacus)
 
+    // Phase 7: EAGLE3 / P-EAGLE Speculative Tree Decoding
+    bool    spec_tree         = false; // enable speculative tree decoding
+    int32_t spec_tree_depth   = 3;     // tree depth (levels of speculation)
+    int32_t spec_tree_width   = 2;     // tree branching width per node
+    float   spec_tree_p_split = 0.15f; // probability threshold for tree branching
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

@@ -1301,6 +1301,119 @@ void llama_context::set_warmup(bool value) {
     //sched_need_reserve = true;
 }
 
+void llama_context::set_tree_mask(const float * mask, int64_t n_tokens, int64_t n_kv) {
+    if (!mask || n_tokens <= 0 || n_kv <= 0) {
+        clear_tree_mask();
+        return;
+    }
+    const size_t total_elements = (size_t)n_tokens * (size_t)n_kv;
+    custom_tree_mask.assign(mask, mask + total_elements);
+    has_custom_tree_mask = true;
+}
+
+void llama_context::clear_tree_mask() {
+    has_custom_tree_mask = false;
+    custom_tree_mask.clear();
+}
+
+void llama_context::apply_tree_mask(ggml_cgraph * gf, const llama_ubatch & ubatch) {
+    if (!has_custom_tree_mask || custom_tree_mask.empty() || !gf) {
+        return;
+    }
+    struct ggml_tensor * t_mask = ggml_graph_get_tensor(gf, "attn_inp_kq_mask");
+    if (!t_mask) {
+        return;
+    }
+    const int64_t n_kv     = t_mask->ne[0];
+    const int64_t n_tokens = ubatch.n_tokens;
+    const size_t total_elements = (size_t)n_kv * (size_t)n_tokens;
+    if (custom_tree_mask.size() < total_elements) {
+        return;
+    }
+
+    if (t_mask->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_set(t_mask, custom_tree_mask.data(), 0, total_elements * sizeof(float));
+    } else if (t_mask->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> mask_f16(total_elements);
+        ggml_fp32_to_fp16_row(custom_tree_mask.data(), mask_f16.data(), total_elements);
+        ggml_backend_tensor_set(t_mask, mask_f16.data(), 0, total_elements * sizeof(ggml_fp16_t));
+    }
+}
+
+void llama_context::set_spec_tree(const int32_t * parent_indices, int64_t n_tree_nodes, int64_t n_prompt) {
+    if (!parent_indices || n_tree_nodes <= 0) {
+        clear_spec_tree();
+        return;
+    }
+    spec_tree_parents.assign(parent_indices, parent_indices + n_tree_nodes);
+    spec_tree_n_prompt = n_prompt;
+    has_spec_tree = true;
+}
+
+void llama_context::clear_spec_tree() {
+    has_spec_tree = false;
+    spec_tree_parents.clear();
+    spec_tree_n_prompt = 0;
+}
+
+void llama_context::apply_spec_tree_mask(ggml_cgraph * gf, const llama_ubatch & ubatch) {
+    if (!has_spec_tree || spec_tree_parents.empty() || !gf) {
+        return;
+    }
+    struct ggml_tensor * t_mask = ggml_graph_get_tensor(gf, "attn_inp_kq_mask");
+    if (!t_mask) {
+        return;
+    }
+    const int64_t n_kv = t_mask->ne[0];
+    const int64_t n_tokens = ubatch.n_tokens;
+    const int64_t n_tree = (int64_t)spec_tree_parents.size();
+    const int64_t total_batch = n_tree + 1;
+    if (n_tokens != total_batch) {
+        return;
+    }
+
+    const float mask_keep = 0.0f;
+    const float mask_drop = -100000.0f;
+    const size_t total_elements = (size_t)n_kv * (size_t)total_batch;
+    std::vector<float> mask(total_elements, mask_drop);
+
+    auto is_ancestor = [&](int32_t anc, int32_t desc) -> bool {
+        if (anc == desc) return true;
+        int32_t cur = desc;
+        while (cur >= 0 && cur < n_tree) {
+            if (cur == anc) return true;
+            cur = spec_tree_parents[cur];
+        }
+        return false;
+    };
+
+    for (int64_t q = 0; q < total_batch; ++q) {
+        float * row = mask.data() + q * n_kv;
+        // Prompt tokens are visible
+        for (int64_t j = 0; j <= spec_tree_n_prompt; ++j) {
+            if (j < n_kv) row[j] = mask_keep;
+        }
+        // Query q > 0 is tree node i = q - 1
+        if (q > 0) {
+            int32_t node_i = (int32_t)(q - 1);
+            for (int64_t k = 0; k < n_tree; ++k) {
+                int64_t col = spec_tree_n_prompt + 1 + k;
+                if (col < n_kv && is_ancestor((int32_t)k, node_i)) {
+                    row[col] = mask_keep;
+                }
+            }
+        }
+    }
+
+    if (t_mask->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_set(t_mask, mask.data(), 0, total_elements * sizeof(float));
+    } else if (t_mask->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> mask_f16(total_elements);
+        ggml_fp32_to_fp16_row(mask.data(), mask_f16.data(), total_elements);
+        ggml_backend_tensor_set(t_mask, mask_f16.data(), 0, total_elements * sizeof(ggml_fp16_t));
+    }
+}
+
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (!sampler && sampling.samplers.count(seq_id) == 0) {
         return true;
@@ -1476,6 +1589,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
+
+        if (has_spec_tree) {
+            apply_spec_tree_mask(res->get_gf(), ubatch);
+        } else if (has_custom_tree_mask) {
+            apply_tree_mask(res->get_gf(), ubatch);
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -4165,6 +4284,22 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 bool llama_get_causal_attn(const llama_context * ctx) {
     return ctx->get_causal_attn();
+}
+
+void llama_set_tree_mask(llama_context * ctx, const float * mask, int64_t n_tokens, int64_t n_kv) {
+    ctx->set_tree_mask(mask, n_tokens, n_kv);
+}
+
+void llama_clear_tree_mask(llama_context * ctx) {
+    ctx->clear_tree_mask();
+}
+
+void llama_set_spec_tree(llama_context * ctx, const int32_t * parent_indices, int64_t n_tree_nodes, int64_t n_prompt) {
+    ctx->set_spec_tree(parent_indices, n_tree_nodes, n_prompt);
+}
+
+void llama_clear_spec_tree(llama_context * ctx) {
+    ctx->clear_spec_tree();
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

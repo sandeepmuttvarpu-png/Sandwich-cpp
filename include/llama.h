@@ -1130,6 +1130,12 @@ extern "C" {
     // Returns whether the context is currently using causal attention
     LLAMA_API bool llama_get_causal_attn(const struct llama_context * ctx);
 
+    // Phase 7: EAGLE3 / Tree Speculative Decoding custom tree attention mask
+    LLAMA_API void llama_set_tree_mask(struct llama_context * ctx, const float * mask, int64_t n_tokens, int64_t n_kv);
+    LLAMA_API void llama_clear_tree_mask(struct llama_context * ctx);
+    LLAMA_API void llama_set_spec_tree(struct llama_context * ctx, const int32_t * parent_indices, int64_t n_tree_nodes, int64_t n_prompt);
+    LLAMA_API void llama_clear_spec_tree(struct llama_context * ctx);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //
