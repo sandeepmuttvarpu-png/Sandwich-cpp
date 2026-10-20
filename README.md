@@ -8,7 +8,6 @@
 [![VRAM: 8GB Friendly](https://img.shields.io/badge/VRAM-8GB%20Friendly%20%F0%9F%92%AA-brightgreen)](#)
 [![Speed: Unhinged](https://img.shields.io/badge/Speed-35%2B%20tok%2Fs%20MoE-red)](#)
 [![No Cap: Verified](https://img.shields.io/badge/Cap%3A-Zero%20%F0%9F%A7%A2-blue)](#)
-[![Companion: Sandwich Deck](https://img.shields.io/badge/GUI-Sandwich%20Deck%20(Tauri%202)-purple.svg)](https://github.com/sandeepmuttvarpu-png/sandwich-deck)
 
 ---
 
@@ -255,7 +254,6 @@ Sandwich.cpp stands on the shoulders of absolute open-source gigachads:
 * **`TheTom`:** The TurboQuant pioneer who made 4-bit spherical KV cache physics actually work.
 * **`ikawrakow` (`ik_llama`):** Hand-written assembly master. Legend.
 * **`Justine Tunney` (`llamafile`):** Making binaries portable across the multiverse.
-* **[Sandwich Deck](https://github.com/sandeepmuttvarpu-png/sandwich-deck):** The companion Tauri 2 native desktop app for people who hate Electron with a passion.
 
 ---
 
