@@ -91,6 +91,9 @@ int main(int argc, char ** argv) {
     params.n_gpu_layers = params.speculative.draft.n_gpu_layers;
     params.n_outputs_max = params.n_parallel;
     params.n_outputs_max_per_seq = 1;
+    params.no_kv_offload = false; // Drafter KV cache remains resident in GPU VRAM
+    params.cache_type_k = params.speculative.draft.cache_type_k;
+    params.cache_type_v = params.speculative.draft.cache_type_v;
     if (params.speculative.draft.cpuparams.n_threads > 0) {
         params.cpuparams.n_threads = params.speculative.draft.cpuparams.n_threads;
     }

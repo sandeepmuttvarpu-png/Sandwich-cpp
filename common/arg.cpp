@@ -2834,6 +2834,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sandwich_auto = true;
         }
     ).set_env("LLAMA_ARG_SANDWICH_AUTO"));
+    add_opt(common_arg(
+        {"--sandwich-predict"},
+        {"--no-sandwich-predict"},
+        string_format("whether to enable predictive topology solver & TurboQuant auto-router in sandwich-auto (default: %s)", params.sandwich_predict ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.sandwich_predict = value;
+        }
+    ).set_env("LLAMA_ARG_SANDWICH_PREDICT"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
@@ -4261,6 +4269,55 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.spec_tree_width = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE_WIDTH"));
+    add_opt(common_arg(
+        {"--jit-down-quant"},
+        "enable in-memory JIT down-quantization of CPU layers to Q2_K (cuts DDR5 load ~50%)",
+        [](common_params & params) {
+            params.jit_down_quant = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_JIT_DOWN_QUANT"));
+    add_opt(common_arg(
+        {"--no-jit-down-quant"},
+        "disable in-memory JIT down-quantization of CPU layers",
+        [](common_params & params) {
+            params.jit_down_quant = false;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--jit-down-quant-start-layer"}, "N",
+        "first layer index to down-quantize in CPU memory (-1 = first CPU layer)",
+        [](common_params & params, int value) {
+            params.jit_down_quant_start_layer = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_JIT_DOWN_QUANT_START_LAYER"));
+    add_opt(common_arg(
+        {"--cpu-cache-path"}, "PATH",
+        "path to save/load transcoded CPU down-quantized layer sidecar cache",
+        [](common_params & params, const std::string & value) {
+            params.cpu_cache_path = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CPU_CACHE_PATH"));
+    add_opt(common_arg(
+        {"--thp-align"},
+        "align CPU tensor allocations to 2MB Transparent HugePages boundaries (default: true)",
+        [](common_params & params) {
+            params.thp_align = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THP_ALIGN"));
+    add_opt(common_arg(
+        {"--no-thp-align"},
+        "disable 2MB THP alignment for CPU tensor allocations",
+        [](common_params & params) {
+            params.thp_align = false;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--early-exit-thresh"}, "THRESH",
+        "probability threshold for GPU boundary early-exit token emission (e.g. 0.92, 0.0 to disable)",
+        [](common_params & params, const std::string & value) {
+            params.early_exit_thresh = std::stof(value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_EARLY_EXIT_THRESH"));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

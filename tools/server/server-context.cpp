@@ -3389,7 +3389,7 @@ private:
 
                         slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
 
-                        const bool spec_reject = slot.use_spec_rejection();
+                        const bool spec_reject = slot.use_spec_rejection() || (params_base.early_exit_thresh > 0.0f);
 
                         common_speculative_get_draft_params(spec.get(), slot.id) = {
                             /* .drafting = */ true,
@@ -4423,7 +4423,25 @@ private:
                 const bool use_rejection = slot.use_spec_rejection() && !slot.spec_draft_q.empty();
 
                 std::vector<llama_token> accepted;
-                if (!synth_probs.empty()) {
+                if (params_base.early_exit_thresh > 0.0f && !slot.spec_draft_q.empty() && !slot.spec_draft_q[0].empty() && slot.spec_draft_q[0][0].p >= params_base.early_exit_thresh) {
+                    // Phase 8: Technique #28 Boundary Early-Exit / Dynamic LayerSkip
+                    // Directly accept all consecutive candidates meeting or exceeding early-exit confidence margin
+                    size_t n_ee = 0;
+                    for (size_t i = 0; i < slot.spec_draft.size() && i < slot.spec_draft_q.size(); ++i) {
+                        if (!slot.spec_draft_q[i].empty() && slot.spec_draft_q[i][0].p >= params_base.early_exit_thresh) {
+                            n_ee++;
+                        } else {
+                            break;
+                        }
+                    }
+                    for (size_t i = 0; i < n_ee; ++i) {
+                        common_sampler_accept(slot.smpl.get(), slot.spec_draft[i], true);
+                        accepted.push_back(slot.spec_draft[i]);
+                    }
+                    const llama_token id_tgt = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch[n_ee]);
+                    common_sampler_accept(slot.smpl.get(), id_tgt, true);
+                    accepted.push_back(id_tgt);
+                } else if (!synth_probs.empty()) {
                     // synthetic acceptance replaces verification entirely, so it comes first
                     accepted = server_sample_and_accept_synth(
                             slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,

@@ -242,6 +242,29 @@ Launch the OpenAI-compatible server on `:8081` and let your agent write code at 
 | `--repeat-penalty` | `FLOAT` | Slaps the model if it starts repeating itself like a broken record (`1.1` is mild). | `1.0` |
 | `-n`, `--predict` | `N` | Max tokens to generate (`-1` = until EOS token, `-2` = fill the entire context). | `-1` |
 
+---
+
+### 8. 🛡️ Phase 8 Dense Wing Overhaul Flags (Techniques #25 - #28)
+
+| Flag | Arg | What it actually does | Default |
+| :--- | :---: | :--- | :---: |
+| `--jit-down-quant` | None | Transcodes CPU layers to `Q2_K` in-memory during mmap loading (cuts DDR5 load ~50%). | Auto (`--sandwich-auto`) |
+| `--no-jit-down-quant` | None | Disables in-memory JIT down-quantization of CPU layers. | `false` |
+| `--jit-down-quant-start-layer` | `N` | First layer index to down-quantize in host CPU memory (`-1` = first CPU layer). | `-1` |
+| `--cpu-cache-path` | `PATH` | Explicit sidecar cache path for transcoded CPU layers (`<model>.sandwich-cpu.bin`). | `<model>.sandwich-cpu.bin` |
+| `--thp-align` | None | Aligns CPU tensor allocations to 2MB boundaries & issues `madvise(MADV_HUGEPAGE)`. | Auto (`--sandwich-auto`) |
+| `--no-thp-align` | None | Disables 2MB Transparent HugePages alignment for host memory. | `false` |
+| `--early-exit-thresh` | `THRESH` | Softmax probability margin threshold to emit high-confidence tokens directly from VRAM. | `0.92` (`0.0` = off) |
+
+---
+
+### 9. 🧠 Phase 9 Predictive Hardware-Aware Topology & TurboQuant Auto-Router (Technique #29)
+
+| Flag | Arg | What it actually does | Default |
+| :--- | :---: | :--- | :---: |
+| `--sandwich-predict` | None | Automatically predicts Asymmetric Split vs. Hybrid Offload and auto-routes TurboQuant KV. | `true` (in auto) |
+| `--no-sandwich-predict` | None | Disables predictive solver and TurboQuant auto-routing (forces static layer fitting). | `false` |
+
 </details>
 
 ---

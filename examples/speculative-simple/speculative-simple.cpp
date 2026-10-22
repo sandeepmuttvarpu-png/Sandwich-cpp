@@ -205,6 +205,26 @@ int main(int argc, char ** argv) {
                     tree = common_spec_tree_build_from_candidates(
                         spec_draft, draft_q, n_past, params.spec_tree_depth, params.spec_tree_width, params.spec_tree_p_split);
                 }
+
+                if (params.early_exit_thresh > 0.0f && !draft_q.empty() && !draft_q[0].empty() && draft_q[0][0].p >= params.early_exit_thresh) {
+                    // Phase 8: Technique #28 Boundary Early-Exit directly from VRAM
+                    id_last = spec_draft[0];
+                    common_sampler_accept(smpl.get(), id_last, true);
+                    prompt_tgt.push_back(id_last);
+                    n_predict++;
+                    n_past++;
+                    stats_tree.n_emitted_total++;
+                    const std::string token_str = common_token_to_piece(ctx_tgt, id_last);
+                    if (params.use_color) {
+                        LOG("\u001b[36m%s\u001b[0m", token_str.c_str());
+                    } else {
+                        LOG("%s", token_str.c_str());
+                    }
+                    if ((params.n_predict >= 0 && n_predict > params.n_predict) || llama_vocab_is_eog(vocab, id_last)) {
+                        break;
+                    }
+                    continue;
+                }
             }
 
             if (tree.empty() && ctx_dft != nullptr) {
