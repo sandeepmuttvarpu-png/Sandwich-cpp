@@ -1909,7 +1909,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         // a lazy context is mapped whatever the load mode, but the memory-fit pass maps nothing
         const bool is_lazy_mapped = ctx_key.lazy && !ml.no_alloc;
 
-        if ((ml.use_mmap || is_lazy_mapped) && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        if ((ml.use_mmap || is_lazy_mapped) && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft && !ctx_key.down_quant) {
             GGML_ASSERT(!ml.no_alloc);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
@@ -3208,6 +3208,9 @@ llama_model_params llama_model_default_params() {
         /*.kv_overrides                =*/ nullptr,
         /*.moe_cache_profile           =*/ nullptr,
         /*.moe_cache_slots             =*/ 0,
+        /*.jit_down_quant              =*/ false,
+        /*.jit_down_quant_start_layer  =*/ -1,
+        /*.cpu_cache_path              =*/ nullptr,
         /*.vocab_only                  =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,

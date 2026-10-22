@@ -613,6 +613,17 @@ struct common_params {
     int32_t spec_tree_width   = 2;     // tree branching width per node
     float   spec_tree_p_split = 0.15f; // probability threshold for tree branching
 
+    // Phase 8: Dense Wing Overhaul (Techniques #25 - #28)
+    bool        jit_down_quant             = false; // in-memory JIT down-quantization of CPU layers to Q2_K
+    int32_t     jit_down_quant_start_layer = -1;    // first layer to down-quantize (-1 = auto first CPU layer)
+    std::string cpu_cache_path;                     // sidecar cache path for transcoded CPU layers
+    bool        thp_align                  = true;  // 2MB Transparent HugePages buffer alignment and madvise
+    float       early_exit_thresh          = 0.0f;  // boundary early-exit confidence threshold (e.g. 0.92, 0.0 = disabled)
+
+    // Phase 9: Predictive Hardware-Aware Topology Solver & TurboQuant Auto-Router (Technique #29)
+    bool        sandwich_predict           = true;  // enable predictive topology & KV routing solver in sandwich-auto
+    bool        sandwich_dispatched        = false; // guard against duplicate auto-dispatch passes
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

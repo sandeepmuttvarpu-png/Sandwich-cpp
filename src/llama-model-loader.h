@@ -15,6 +15,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
@@ -153,12 +154,16 @@ struct llama_model_loader {
     struct ctx_key {
         ggml_backend_buffer_type_t buft;
         bool lazy;
+        bool down_quant;
     };
 
     struct ctx_key_comparator {
         bool operator()(const ctx_key & lhs, const ctx_key & rhs) const {
             if (lhs.lazy != rhs.lazy) {
                 return lhs.lazy < rhs.lazy;
+            }
+            if (lhs.down_quant != rhs.down_quant) {
+                return lhs.down_quant < rhs.down_quant;
             }
             return strcmp(ggml_backend_buft_name(lhs.buft), ggml_backend_buft_name(rhs.buft)) < 0;
         }
@@ -173,6 +178,13 @@ struct llama_model_loader {
     ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
     ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
+    // Phase 8: Dense Wing Overhaul (In-Memory JIT CPU Down-Quantization)
+    std::string model_path;
+    bool        jit_down_quant             = false;
+    int32_t     jit_down_quant_start_layer = -1;
+    std::string cpu_cache_path;
+    std::unordered_set<std::string> down_quant_tensors;
+
     llama_model_loader(
         struct gguf_context * metadata,
         llama_model_set_tensor_data_t set_tensor_data,
@@ -186,7 +198,10 @@ struct llama_model_loader {
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-        const llama_model_tensor_type_override * param_tensor_type_overrides_p = nullptr);
+        const llama_model_tensor_type_override * param_tensor_type_overrides_p = nullptr,
+        bool jit_down_quant = false,
+        int32_t jit_down_quant_start_layer = -1,
+        const char * cpu_cache_path = nullptr);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type

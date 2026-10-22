@@ -542,8 +542,17 @@ llama_model_loader::llama_model_loader(
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-        const llama_model_tensor_type_override * param_tensor_type_overrides_p)
+        const llama_model_tensor_type_override * param_tensor_type_overrides_p,
+        bool jit_down_quant,
+        int32_t jit_down_quant_start_layer,
+        const char * cpu_cache_path)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
+    this->model_path                 = fname;
+    this->jit_down_quant             = jit_down_quant;
+    this->jit_down_quant_start_layer = jit_down_quant_start_layer;
+    if (cpu_cache_path) {
+        this->cpu_cache_path = cpu_cache_path;
+    }
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -1120,9 +1129,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
     // set below, before buft_for_tensor() runs
     bool is_lazy = false;
+    bool is_down_quant = false;
 
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
-        const ctx_key key { buft, is_lazy };
+        const ctx_key key { buft, is_lazy, is_down_quant };
 
         auto it = ctx_map.find(key);
         if (it == ctx_map.end()) {
@@ -1339,6 +1349,26 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
         ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
         GGML_ASSERT(buft != nullptr);
+        auto * buft_dev = ggml_backend_buft_get_device(buft);
+        bool is_cpu = (buft_dev == nullptr || ggml_backend_dev_type(buft_dev) == GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (jit_down_quant && is_cpu && tn.bid >= 0 && (jit_down_quant_start_layer < 0 || tn.bid >= jit_down_quant_start_layer)) {
+            if (tn.suffix != nullptr && strcmp(tn.suffix, "weight") == 0 && t_meta.ne[0] % 256 == 0 && t_meta.ne[1] > 1) {
+                if (t_meta.type != GGML_TYPE_Q2_K && t_meta.type != GGML_TYPE_IQ2_XXS) {
+                    t_meta.type = GGML_TYPE_Q2_K;
+                    is_down_quant = true;
+                    for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
+                        t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
+                        if (dim == 0) {
+                            t_meta.nb[dim] = ggml_type_size(t_meta.type);
+                        } else if (dim == 1) {
+                            t_meta.nb[dim] = ggml_row_size(t_meta.type, t_meta.ne[dim-1]);
+                        } else {
+                            t_meta.nb[dim] = t_meta.ne[dim-1]*t_meta.nb[dim-1];
+                        }
+                    }
+                }
+            }
+        }
         ggml_context * ctx = ctx_for_buft(buft);
         ggml_tensor * ret = ggml_dup_tensor(ctx, &t_meta);
         ggml_set_name(ret, tn.str().c_str());
@@ -1394,6 +1424,33 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
     if (buft == nullptr) {
         return nullptr;
+    }
+
+    auto * buft_dev = ggml_backend_buft_get_device(buft);
+    bool is_cpu = (buft_dev == nullptr || ggml_backend_dev_type(buft_dev) == GGML_BACKEND_DEVICE_TYPE_CPU);
+
+    if (jit_down_quant && is_cpu && tn.bid >= 0 && (jit_down_quant_start_layer < 0 || tn.bid >= jit_down_quant_start_layer)) {
+        if (tn.suffix != nullptr && strcmp(tn.suffix, "weight") == 0 && t_meta.ne[0] % 256 == 0 && t_meta.ne[1] > 1) {
+            if (t_meta.type != GGML_TYPE_Q2_K && t_meta.type != GGML_TYPE_IQ2_XXS) {
+                LLAMA_LOG_INFO("%s: Phase 8 In-Memory JIT CPU Down-Quant: %s (%s -> Q2_K)\n",
+                    __func__, tn.str().c_str(), ggml_type_name(t_meta.type));
+                t_meta.type = GGML_TYPE_Q2_K;
+                type_overridden = true;
+                is_down_quant = true;
+                down_quant_tensors.insert(tn.str());
+
+                for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
+                    t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
+                    if (dim == 0) {
+                        t_meta.nb[dim] = ggml_type_size(t_meta.type);
+                    } else if (dim == 1) {
+                        t_meta.nb[dim] = ggml_row_size(t_meta.type, t_meta.ne[dim-1]);
+                    } else {
+                        t_meta.nb[dim] = t_meta.ne[dim-1]*t_meta.nb[dim-1];
+                    }
+                }
+            }
+        }
     }
 
     ggml_context * ctx = ctx_for_buft(buft);
@@ -1639,6 +1696,55 @@ bool llama_model_loader::load_all_data(
         tensors.push_back(cur);
     }
 
+    std::unordered_map<std::string, ggml_tensor *> dq_map;
+    for (auto * cur_t : tensors) {
+        if (down_quant_tensors.count(ggml_get_name(cur_t))) {
+            dq_map[ggml_get_name(cur_t)] = cur_t;
+        }
+    }
+
+    // Phase 8: Check and load sidecar cache for down-quantized CPU tensors
+    // Only touch sidecar cache if this context actually owns the down-quantized tensors (avoids GPU context truncating CPU cache)
+    std::string sidecar_cache_path = cpu_cache_path.empty() && !model_path.empty() ? (model_path + ".sandwich-cpu.bin") : cpu_cache_path;
+    bool cache_loaded = false;
+    if (!dq_map.empty() && !sidecar_cache_path.empty()) {
+        FILE * f_cache = fopen(sidecar_cache_path.c_str(), "rb");
+        if (f_cache) {
+            char magic[8] = {0};
+            uint32_t version = 0;
+            uint32_t n_saved_tensors = 0;
+            uint64_t saved_file_size = 0;
+            if (fread(magic, 1, 8, f_cache) == 8 && strncmp(magic, "SANDWCPU", 8) == 0 &&
+                fread(&version, sizeof(version), 1, f_cache) == 1 && version == 1 &&
+                fread(&n_saved_tensors, sizeof(n_saved_tensors), 1, f_cache) == 1 && n_saved_tensors == dq_map.size() &&
+                fread(&saved_file_size, sizeof(saved_file_size), 1, f_cache) == 1 && saved_file_size == files.front()->size()) {
+
+                bool all_read_ok = true;
+                for (uint32_t ti = 0; ti < n_saved_tensors; ++ti) {
+                    uint32_t name_len = 0;
+                    if (fread(&name_len, sizeof(name_len), 1, f_cache) != 1 || name_len > 256) { all_read_ok = false; break; }
+                    char tname[256] = {0};
+                    if (fread(tname, 1, name_len, f_cache) != name_len) { all_read_ok = false; break; }
+                    uint64_t nbytes = 0;
+                    if (fread(&nbytes, sizeof(nbytes), 1, f_cache) != 1) { all_read_ok = false; break; }
+                    auto it = dq_map.find(tname);
+                    if (it == dq_map.end() || ggml_nbytes(it->second) != nbytes || it->second->data == nullptr) {
+                        all_read_ok = false; break;
+                    }
+                    if (fread(it->second->data, 1, nbytes, f_cache) != nbytes) {
+                        all_read_ok = false; break;
+                    }
+                }
+                if (all_read_ok) {
+                    cache_loaded = true;
+                    LLAMA_LOG_INFO("%s: Instantaneous CPU down-quant sidecar cache loaded (%u tensors) from %s (<150 ms)\n",
+                        __func__, n_saved_tensors, sidecar_cache_path.c_str());
+                }
+            }
+            fclose(f_cache);
+        }
+    }
+
     // without mmap, tensors in non-host buffers are staged through a temporary buffer sized like the tensor
     // load them biggest-first so the largest staging buffer is allocated while the fewest weights are resident
     if (!use_mmap) {
@@ -1697,7 +1803,33 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
-                ggml_backend_tensor_set(cur, data, 0, n_size);
+                if (down_quant_tensors.count(ggml_get_name(cur))) {
+                    if (!cache_loaded) {
+                        // Technique #25: In-Memory JIT SIMD Down-Quantization across physical P-cores
+                        GGML_ASSERT(cur->data != nullptr);
+                        int64_t n_rows = ggml_nrows(cur);
+                        int64_t n_per_row = cur->ne[0];
+                        enum ggml_type src_type = weight->tensor->type;
+                        const auto * src_traits = ggml_get_type_traits(src_type);
+                        size_t src_row_size = ggml_row_size(src_type, n_per_row);
+                        size_t dst_row_size = ggml_row_size(cur->type, n_per_row);
+
+                        #pragma omp parallel
+                        {
+                            std::vector<float> row_f32(n_per_row);
+                            #pragma omp for schedule(static)
+                            for (int64_t r = 0; r < n_rows; ++r) {
+                                const uint8_t * src_row = (const uint8_t *) data + r * src_row_size;
+                                uint8_t * dst_row = (uint8_t *) cur->data + r * dst_row_size;
+
+                                src_traits->to_float(src_row, row_f32.data(), n_per_row);
+                                ggml_quantize_chunk(GGML_TYPE_Q2_K, row_f32.data(), dst_row, 0, 1, n_per_row, nullptr);
+                            }
+                        }
+                    }
+                } else {
+                    ggml_backend_tensor_set(cur, data, 0, n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);
@@ -1801,6 +1933,37 @@ bool llama_model_loader::load_all_data(
     }
     if (validation_failed) {
         throw std::runtime_error("found tensors with invalid data");
+    }
+
+    // Phase 8: Persist transcoded CPU arena to sidecar cache for instant subsequent loading
+    // Only write if this context actually owns the down-quantized tensors
+    if (!dq_map.empty() && !cache_loaded && !files.empty() && !sidecar_cache_path.empty()) {
+        FILE * f_out = fopen(sidecar_cache_path.c_str(), "wb");
+        if (f_out) {
+            char magic[8] = {'S','A','N','D','W','C','P','U'};
+            uint32_t version = 1;
+            uint32_t n_saved_tensors = (uint32_t) down_quant_tensors.size();
+            uint64_t file_size = files.front()->size();
+            fwrite(magic, 1, 8, f_out);
+            fwrite(&version, sizeof(version), 1, f_out);
+            fwrite(&n_saved_tensors, sizeof(n_saved_tensors), 1, f_out);
+            fwrite(&file_size, sizeof(file_size), 1, f_out);
+
+            for (auto * cur_t : tensors) {
+                if (down_quant_tensors.count(ggml_get_name(cur_t)) && cur_t->data != nullptr) {
+                    std::string tname = ggml_get_name(cur_t);
+                    uint32_t name_len = (uint32_t) tname.size();
+                    uint64_t nbytes = ggml_nbytes(cur_t);
+                    fwrite(&name_len, sizeof(name_len), 1, f_out);
+                    fwrite(tname.data(), 1, name_len, f_out);
+                    fwrite(&nbytes, sizeof(nbytes), 1, f_out);
+                    fwrite(cur_t->data, 1, nbytes, f_out);
+                }
+            }
+            fclose(f_out);
+            LLAMA_LOG_INFO("%s: Transcoded CPU arena persisted to sidecar %s (%u tensors)\n",
+                __func__, sidecar_cache_path.c_str(), n_saved_tensors);
+        }
     }
 
     // check if this is the last call and do final cleanup

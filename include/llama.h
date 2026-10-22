@@ -360,6 +360,11 @@ extern "C" {
         const char * moe_cache_profile; // routing profile CSV from llama-moe-trace (NULL = disabled)
         int32_t      moe_cache_slots;   // experts cached per layer (0 = disabled)
 
+        // Phase 8: Dense Wing Overhaul (Technique #25: In-Memory JIT CPU Down-Quantization)
+        bool         jit_down_quant;             // down-quantize CPU layers in-memory to Q2_K
+        int32_t      jit_down_quant_start_layer; // first layer to down-quantize (-1 = first CPU layer)
+        const char * cpu_cache_path;             // path to load/save down-quantized CPU layer cache (NULL = auto sidecar)
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data
@@ -402,6 +407,7 @@ extern "C" {
         float    yarn_beta_slow;   // YaRN high correction dim
         uint32_t yarn_orig_ctx;    // YaRN original context size
         float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
+        float    early_exit_thresh;// Phase 8: boundary early-exit threshold (0.0 = disabled, e.g. 0.92)
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;

@@ -37,6 +37,9 @@
 #if defined(__gnu_linux__)
 #include <syscall.h>
 #endif
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 
 #if defined(__APPLE__)
 #include <unistd.h>
@@ -331,9 +334,16 @@ void ggml_log_callback_default(enum ggml_log_level level, const char * text, voi
 
 void * ggml_aligned_malloc(size_t size) {
 #if defined(__s390x__)
-    const int alignment = 256;
+    int alignment = 256;
 #else
-    const int alignment = 64;
+    int alignment = 64;
+#endif
+
+#if defined(__linux__)
+    // Technique #26: 2MB Transparent HugePages (THP) Alignment
+    if (size >= 2 * 1024 * 1024) {
+        alignment = 2 * 1024 * 1024;
+    }
 #endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -381,6 +391,11 @@ void * ggml_aligned_malloc(size_t size) {
         GGML_LOG_ERROR("%s: %s (attempted to allocate %6.2f MB)\n", __func__, error_desc, size/(1024.0*1024.0));
         return NULL;
     }
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    if (aligned_memory != NULL && size >= 2 * 1024 * 1024) {
+        madvise(aligned_memory, size, MADV_HUGEPAGE);
+    }
+#endif
     return aligned_memory;
 #endif
 }
