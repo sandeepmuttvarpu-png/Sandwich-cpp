@@ -381,7 +381,7 @@ struct llama_moe_cache::impl {
                 return;
             }
             auto & loc = locators[il][expert];
-            loc.tier = moe_tier_level::TIER_WARM_RAM;
+            loc.tier = (loc.ram_ptr != nullptr && loc.warm_slot >= 0) ? moe_tier_level::TIER_WARM_RAM : moe_tier_level::TIER_COLD_SSD;
             loc.vram_slot = -1;
         }
 
@@ -403,10 +403,9 @@ struct llama_moe_cache::impl {
                     continue;
                 }
                 auto & loc = locators[il][e];
-                if (loc.tier == moe_tier_level::TIER_WARM_RAM || loc.tier == moe_tier_level::TIER_HOT_VRAM) {
-                    if (loc.warm_slot >= 0) {
-                        touch_warm(loc.warm_slot);
-                    }
+                // An expert is genuinely warm ONLY if it has an allocated warm slot and valid ram pointer
+                if (loc.ram_ptr != nullptr && loc.warm_slot >= 0) {
+                    touch_warm(loc.warm_slot);
                     tier2_ram_hits++;
                     continue;
                 }
@@ -1023,7 +1022,10 @@ struct llama_moe_cache::impl {
                 const size_t tensor_off  = tier_engine.group_tensor_offsets[l.ig][ip];
 
                 for (const auto & f : fills) {
-                    const void * warm_src = (const uint8_t *)tier_engine.locators[il][f.expert].ram_ptr + tensor_off;
+                    const void * host_expert_ptr = (const uint8_t *)w->data + f.expert * expert_size;
+                    const void * warm_src = (tier_engine.locators[il][f.expert].ram_ptr != nullptr) ?
+                        (const uint8_t *)tier_engine.locators[il][f.expert].ram_ptr + tensor_off :
+                        host_expert_ptr;
                     const void * dma_src  = devices[g.id].pinned_ring.stage(warm_src, expert_size);
 
                     ggml_backend_tensor_set_async(backend, bank, dma_src, f.slot * expert_size, expert_size);
@@ -1096,6 +1098,19 @@ struct llama_moe_cache::impl {
                 tier_engine.tier3_cold_fetches,
                 tier_engine.total_cold_bytes / 1024.0 / 1024.0,
                 tier_engine.uring_active ? "io_uring DMA" : "pread fallback");
+
+            fprintf(stderr, "\n=======================================================\n");
+            fprintf(stderr, "🥪 [Phase 12] 3-Tier Hierarchical MoE Engine Telemetry\n");
+            fprintf(stderr, "   Tier 1 (HOT VRAM)  Hits   : %10zu\n", stats_small.hits + stats_large.hits);
+            fprintf(stderr, "   Tier 2 (WARM RAM)  Hits   : %10zu (Pool: %.2f / %.2f GiB used)\n",
+                tier_engine.tier2_ram_hits,
+                (tier_engine.warm_slots_used * tier_engine.slot_stride) / 1024.0 / 1024.0 / 1024.0,
+                tier_engine.pool_capacity / 1024.0 / 1024.0 / 1024.0);
+            fprintf(stderr, "   Tier 3 (COLD SSD)  Fetches: %10zu (Streamed: %.2f MiB via %s)\n",
+                tier_engine.tier3_cold_fetches,
+                tier_engine.total_cold_bytes / 1024.0 / 1024.0,
+                tier_engine.uring_active ? "io_uring DMA" : "pread fallback");
+            fprintf(stderr, "=======================================================\n\n");
         }
     }
 };
