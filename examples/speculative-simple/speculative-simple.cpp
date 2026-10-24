@@ -50,6 +50,11 @@ int main(int argc, char ** argv) {
     model_tgt = llama_init_tgt->model();
     ctx_tgt   = llama_init_tgt->context();
 
+    if (params.logits_topk > 0) {
+        llama_set_logits_topk(ctx_tgt, params.logits_topk);
+        LOG_INF("   -> [Technique #37] Target Context GPU Top-K Logits Reduction enabled: k = %d\n", params.logits_topk);
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
     // load the draft model (if any) - this also creates the MTP draft context when MTP speculation is enabled
@@ -159,6 +164,8 @@ int main(int argc, char ** argv) {
     const auto t_enc_end = ggml_time_us();
 
     common_spec_tree_stats stats_tree;
+    common_spec_tree_pid_controller pid_ctrl;
+    common_spec_pipe_buffer pipe_buf;
 
     const auto t_dec_start = ggml_time_us();
 
@@ -186,14 +193,23 @@ int main(int argc, char ** argv) {
             }
 
             // 1. Build candidate tree on drafter / speculator
+            int32_t eff_tree_depth   = (params.spec_tree_adaptive) ? pid_ctrl.current_depth   : params.spec_tree_depth;
+            int32_t eff_tree_width   = (params.spec_tree_adaptive) ? pid_ctrl.current_width   : params.spec_tree_width;
+            float   eff_tree_p_split = (params.spec_tree_adaptive) ? pid_ctrl.current_p_split : params.spec_tree_p_split;
+
             common_spec_tree tree;
+            if (params.spec_pipe && pipe_buf.staged_valid && pipe_buf.staged_expected_root == id_last && !pipe_buf.get_staged_tree().empty()) {
+                tree = pipe_buf.get_staged_tree();
+                pipe_buf.swap();
+            }
+
             llama_tokens spec_draft;
             std::vector<std::vector<llama_token_data>> draft_q;
 
-            if (spec != nullptr) {
+            if (tree.empty() && spec != nullptr) {
                 common_speculative_get_draft_params(spec, seq_id) = {
                     /* .drafting   = */ true,
-                    /* .n_max      = */ std::min(n_draft_max, params.spec_tree_depth),
+                    /* .n_max      = */ std::min(n_draft_max, eff_tree_depth),
                     /* .pos0       = */ n_past,
                     /* .id_last    = */ id_last,
                     /* .prompt     = */ &prompt_tgt,
@@ -203,7 +219,7 @@ int main(int argc, char ** argv) {
                 common_speculative_draft(spec);
                 if (!spec_draft.empty()) {
                     tree = common_spec_tree_build_from_candidates(
-                        spec_draft, draft_q, n_past, params.spec_tree_depth, params.spec_tree_width, params.spec_tree_p_split);
+                        spec_draft, draft_q, n_past, eff_tree_depth, eff_tree_width, eff_tree_p_split);
                 }
 
                 if (params.early_exit_thresh > 0.0f && !draft_q.empty() && !draft_q[0].empty() && draft_q[0][0].p >= params.early_exit_thresh) {
@@ -229,7 +245,7 @@ int main(int argc, char ** argv) {
 
             if (tree.empty() && ctx_dft != nullptr) {
                 tree = common_spec_tree_build(
-                    ctx_dft, id_last, n_past, params.spec_tree_depth, params.spec_tree_width, params.spec_tree_p_split);
+                    ctx_dft, id_last, n_past, eff_tree_depth, eff_tree_width, eff_tree_p_split);
             }
 
             if (ctx_dft != nullptr) {
@@ -283,6 +299,11 @@ int main(int argc, char ** argv) {
             stats_tree.n_forward_passes += 1;
             stats_tree.n_emitted_total  += tree_res.total_tokens_emitted;
 
+            // Phase 10 / Technique #31: Adaptive Spec-Tree PID modulation
+            if (params.spec_tree_adaptive && tree.size() > 0) {
+                pid_ctrl.update(tree_res.n_accepted, (int32_t)tree.size());
+            }
+
             // 4. Prune KV cache for rejected branches
             common_spec_tree_prune_kv(ctx_tgt, ctx_dft, tree, tree_res, seq_id, n_past);
 
@@ -315,6 +336,42 @@ int main(int argc, char ** argv) {
             n_drafted += (int)tree.size();
             n_accept  += tree_res.n_accepted;
             n_predict += tree_res.total_tokens_emitted;
+
+            // Phase 10 / Technique #30: Pipelined Speculative Execution Pre-drafting
+            if (params.spec_pipe) {
+                if (has_eos || tree_res.target_token < 0 || (params.n_predict >= 0 && n_predict > params.n_predict)) {
+                    pipe_buf.invalidate();
+                } else if (spec != nullptr) {
+                    llama_tokens next_spec_draft;
+                    std::vector<std::vector<llama_token_data>> next_draft_q;
+                    int next_draft_max = (int) llama_n_ctx(ctx_tgt) - n_past - 2;
+                    if (params.n_predict >= 0) {
+                        next_draft_max = std::min(next_draft_max, params.n_predict - n_predict - 1);
+                    }
+                    if (next_draft_max > 0) {
+                        common_speculative_get_draft_params(spec, seq_id) = {
+                            /* .drafting   = */ true,
+                            /* .n_max      = */ std::min(next_draft_max, eff_tree_depth),
+                            /* .pos0       = */ n_past,
+                            /* .id_last    = */ id_last,
+                            /* .prompt     = */ &prompt_tgt,
+                            /* .result     = */ &next_spec_draft,
+                            /* .result_q   = */ &next_draft_q,
+                        };
+                        common_speculative_draft(spec);
+                        if (!next_spec_draft.empty()) {
+                            pipe_buf.get_staged_tree() = common_spec_tree_build_from_candidates(
+                                next_spec_draft, next_draft_q, n_past, eff_tree_depth, eff_tree_width, eff_tree_p_split);
+                            pipe_buf.staged_expected_root = id_last;
+                            pipe_buf.staged_valid = true;
+                        } else {
+                            pipe_buf.invalidate();
+                        }
+                    } else {
+                        pipe_buf.invalidate();
+                    }
+                }
+            }
 
             if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
                 break;

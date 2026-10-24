@@ -3148,7 +3148,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 params.type_k,
                                 params.type_v,
                                 !cparams.flash_attn,
-                                cparams.offload_kqv,
+                                cparams.offload_kqv || cparams.split_kv,
                                 cparams.kv_unified,
                                 cparams.n_ctx_seq,
                                 cparams.n_seq_max,
@@ -3158,7 +3158,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 nullptr,
                                 filter,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                "",
+                                cparams.split_kv);
                     }
                 }
             }

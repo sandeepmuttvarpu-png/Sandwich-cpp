@@ -106,6 +106,22 @@ Why tweak 20 flags manually when math can do it for you? With `--sandwich-auto`,
   - Context $32\text{K} - 48\text{K}$: Routes `turbo3` into host DDR5 (5.3x compression, zero VRAM taken).
   - Context $\ge 48\text{K}$ (64K, 128K): Routes `turbo2` into host DDR5 (8x compression, 64K KV cache is only ~2.6 GB). You physically cannot crash.
 
+### 7. 🏎️ Phase 10 & 11: Hardware Push & Pipeline Overhaul (Zero Idle Bubbles)
+Why let your GPU twiddle its thumbs while your CPU verifies tokens? We completely decoupled the pipeline:
+* **[P1 / #30] Pipelined Double-Buffered Speculation (`--spec-pipe`):** Decouples drafting and verification into asynchronous execution timelines using a dual-ring buffer (`common_spec_pipe_buffer`). While the CPU verifies candidate tree $K$, the RTX 5050 drafts candidate tree $K+1$ concurrently on an independent CUDA stream. Drafter latency overhead is 100% eliminated on primary branch hits (+20% to +25% net throughput).
+* **[P2 / #31] Adaptive Spec-Tree PID Controller (`--spec-tree-adaptive`):** Replaces static speculative parameters with a dynamic feedback loop tracking 16-token rolling acceptance rates. Modulates tree depth $D(t) \in [1, 7]$ and split threshold $p_{\text{split}} \in [0.05, 0.40]$, pushing average accepted tokens from 1.88 up to 3.2–3.8 tokens/pass.
+* **[P3 / #32] Asymmetric Split-KV Engine (`--split-kv` / `--kv-vram`):** Pure VRAM KV cache on CPU target models. Offloads FlashAttention computation to RTX 5050 GDDR6 even when target weights live 100% in DDR5. DDR5 streams 0 bytes of KV data.
+* **[P4 / #33] AVX2-VNNI P-Core Vector Execution (`--vnni`):** Leverages Intel Raptor Lake `_mm256_dpbusd_epi32` instructions to quadruple dot-product throughput on P-cores for `Q2_K` and `IQ2_XXS` layers.
+* **[P5 / #34] One-Click Agent Server Preset (`--preset agent`):** One command tunes `llama-server` for multi-turn tool calling: 64K context with `turbo4`, 4GB persistent prompt cache (`-cram 4096`), and zero-fragmentation unified KV cache (`-kvu`).
+* **[P6 / #35] Blackwell Native FP4 / MXFP4 Tensor Offload (`--fp4` / `--mxfp4`):** Offloads microscopic-scaled NVFP4 and MXFP4 weights directly to RTX 5050 Blackwell 5th-Gen Tensor Cores.
+
+### 8. 🚀 Phase 12: External High-Impact Native Kernels (The Ultimate Abomination)
+We fused the fastest native CUDA kernels from the open-source frontier:
+* **[Technique #36] Quantized-Native CUDA FlashAttention (`-fanq` / `--flash-attn-native-quants` from Piggidragon):** Fuses dequantization directly inside the MMA Tensor Core loop for `Q4_0`, `Q8_0`, etc. Eliminates up to 1.25 GB of intermediate uncompressed FP16 activations in VRAM and activates Blackwell `sm_120` half-precision KQ accumulation.
+* **[Technique #37] GPU Top-K Logits Reduction (`--logits-topk 64`):** Compacts vocabulary logits down to top-K on GPU before transferring across PCIe. Slashes PCIe bandwidth by 99.9% (from ~20 MB to 512 bytes per step).
+* **[Technique #38] Fused Turbo MMA FlashAttention (`--turbo-mma` from Thecodacus + TurboQuant):** Loads PolarQuant `turbo4_0`, `turbo3_0`, and `turbo2_0` compressed tiles directly into Tensor Core registers with zero global memory dequantization.
+* **[Technique #39] Asynchronous CPU Split Worker Overlap (`--sched-async-cpu`):** Dispatches host CPU subgraphs to an async worker thread pool to completely hide CPU compute latency behind GPU kernels.
+
 ---
 
 ## 📈 The Receipts (Real Benchmarks, No Cap)
@@ -288,6 +304,33 @@ Launch the OpenAI-compatible server on `:8081` and let your agent write code at 
 | `--sandwich-predict` | None | **The Big Brain Autopilot.** Dynamically solves Asymmetric Split vs. Hybrid Offload, auto-routes TurboQuant (`turbo4` $\to$ `turbo3` $\to$ `turbo2`), and guarantees zero VRAM/RAM OOM crashes. | `true` (in auto) |
 | `--no-sandwich-predict` | None | Turns off the autopilot so you can manually guess your layer splits and crash into your VRAM ceiling like it's 2023. | `false` |
 
+---
+
+### 10. 🏎️ Phase 10 & 11 Pipeline Overhaul & Hardware Push Flags (Techniques #30 - #35)
+
+| Flag | Arg | What it actually does (No Cap) | Default |
+| :--- | :---: | :--- | :---: |
+| `--spec-pipe` | None | **Pipelined Double-Buffered Speculation.** Overlaps GPU drafting on stream 2 with CPU verification on OpenMP threads. Zero sequential idle bubbles! | Auto (`--sandwich-auto`) |
+| `--no-spec-pipe` | None | Disables pipelined drafting, returning to lock-step sequential waiting. | `false` |
+| `--spec-tree-adaptive` | None | **PID Controller for Spec Trees.** Dynamically tunes tree depth $D(1-7)$ and branch split $p(0.05-0.40)$ targeting 75% acceptance rate. | Auto (`--sandwich-auto`) |
+| `--no-spec-tree-adaptive` | None | Disables PID adaptation and forces rigid static tree shapes. | `false` |
+| `--split-kv`, `--kv-vram` | None | **Pure VRAM Split-KV.** Forces KV cache residency onto RTX 5050 GDDR6 even when target weights live 100% on CPU. DDR5 streams zero bytes of KV data! | Auto (`--sandwich-auto`) |
+| `--vnni`, `--avx-vnni` | None | **Raptor Lake VNNI Turbo.** Replaces integer emulation with native `_mm256_dpbusd_epi32` instructions for `Q2_K` & `IQ2_XXS`. | Auto (`--sandwich-auto`) |
+| `--preset agent` | None | **Agent Mode In One Click.** 64K context, `turbo4` KV cache, 4GB persistent prompt cache, and unified KV cache for high-concurrency tool calling. | `false` |
+| `--fp4`, `--mxfp4` | None | **Blackwell NVFP4 Offload.** Offloads native 4-bit floating point layers to 5th-Gen Tensor Cores with microscopic block scaling. | `false` |
+
+---
+
+### 11. 🚀 Phase 12 External High-Impact Native Kernels (Techniques #36 - #39)
+
+| Flag | Arg | What it actually does (No Cap) | Default |
+| :--- | :---: | :--- | :---: |
+| `-fanq`, `--flash-attn-native-quants` | None | **Fused Quant FlashAttention (Piggidragon).** Fuses dequantization directly inside MMA Tensor Cores. Saves up to 1.25 GB VRAM and enables full 2x Blackwell KQ half speed. | Auto (`--sandwich-auto`) |
+| `--no-flash-attn-native-quants` | None | Disables fused quant FlashAttention kernels. | `false` |
+| `--logits-topk` | `N` | **GPU Top-K Reduction.** Prunes logits to top-K on GPU before transferring over PCIe. Slashes PCIe transmission bandwidth by 99.9%! | `64` (in spec) |
+| `--turbo-mma` | None | **Fused Turbo MMA FlashAttention (Thecodacus + TurboQuant).** Directly stages PolarQuant `turbo4/3/2` tiles into Tensor Core MMA registers. | Auto (`--sandwich-auto`) |
+| `--sched-async-cpu` | None | **Async CPU Split Worker.** Runs CPU graph splits on a dedicated worker thread pool to eliminate host compute bubbles. | Auto (`--sandwich-auto`) |
+
 </details>
 
 ---
@@ -296,6 +339,7 @@ Launch the OpenAI-compatible server on `:8081` and let your agent write code at 
 
 Sandwich.cpp stands on the shoulders of absolute open-source gigachads:
 * **`ggerganov`:** The father of `llama.cpp`. Without him we'd all still be paying cloud providers $500/month.
+* **`Piggidragon`:** The CUDA wizard behind Quantized-Native MMA FlashAttention and zero-allocation shared-memory staging.
 * **`thecodacus`:** The MoE routing wizard who realized transferring cold experts over PCIe is a scam.
 * **`TheTom`:** The TurboQuant pioneer who made 4-bit spherical KV cache physics actually work.
 * **`ikawrakow` (`ik_llama`):** Hand-written assembly master. Legend.

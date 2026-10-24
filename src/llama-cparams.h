@@ -37,6 +37,8 @@ struct llama_cparams {
     bool embeddings_nextn_masked; // extract for only rows where batch.logits != 0
     bool causal_attn;
     bool offload_kqv;
+    bool split_kv;
+    bool flash_attn_native_quants;
     bool sched_async_cpu;
     bool moe_hot_only;
     bool flash_attn;

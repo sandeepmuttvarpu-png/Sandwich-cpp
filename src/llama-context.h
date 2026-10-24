@@ -83,6 +83,7 @@ struct llama_context {
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
+    bool    get_logits_topk_active() const { return topk_active; }
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -123,6 +124,7 @@ struct llama_context {
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
+    void set_logits_topk(int32_t k);
 
     // Phase 7: EAGLE3 / Tree Speculative Decoding custom attention mask
     void set_tree_mask(const float * mask, int64_t n_tokens, int64_t n_kv);
@@ -430,6 +432,35 @@ private:
     bool has_spec_tree = false;
     std::vector<int32_t> spec_tree_parents;
     int64_t spec_tree_n_prompt = 0;
+
+    // GPU Top-K logits reduction over PCIe
+    int32_t logits_topk = 0;
+    struct topk_share {
+        ggml_backend_t             backend = nullptr;
+        ggml_backend_buffer_type_t buft    = nullptr;
+        ggml_gallocr_ptr           galloc;
+        ggml_tensor *              src  = nullptr;
+        int64_t                    row0 = 0;
+        int64_t                    rows = 0;
+        int64_t                    k    = 0;
+        size_t                     off  = 0;
+    };
+    std::vector<topk_share>  topk_shares;
+    ggml_context_ptr         topk_ctx;
+    bool                     topk_active = false;
+    int64_t                  topk_n      = 0;
+    std::vector<int32_t>     topk_idx;
+    std::vector<float>       topk_val;
+    std::vector<int32_t>     topk_dev_row;
+    std::vector<uint8_t>     topk_row_full;
+    bool                     topk_merged = false;
+    std::vector<llama_token> topk_tokens;
+    std::vector<float>       topk_logits;
+    uint64_t                 n_graph_computes = 0;
+    uint64_t                 topk_graph       = 0;
+    bool    logits_topk_extract(ggml_backend_t backend_res, ggml_tensor * t_logits, int64_t n_outputs, int64_t n_outputs_all);
+    void    topk_merge();
+    float * topk_full_row(int64_t row);
 
     // perf
     mutable int64_t t_start_us  = 0;

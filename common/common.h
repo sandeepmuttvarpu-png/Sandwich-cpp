@@ -624,6 +624,19 @@ struct common_params {
     bool        sandwich_predict           = true;  // enable predictive topology & KV routing solver in sandwich-auto
     bool        sandwich_dispatched        = false; // guard against duplicate auto-dispatch passes
 
+    // Phase 10 & 11: Pipeline Overhaul & Hardware Push (Techniques #30 - #35)
+    bool        spec_pipe                  = false; // [P1 / #30] Pipelined double-buffered speculative execution
+    bool        spec_tree_adaptive         = false; // [P2 / #31] Adaptive spec-tree PID controller (dynamic depth & p_split)
+    bool        split_kv                   = false; // [P3 / #32] Asymmetric Split-KV engine (pure VRAM KV cache on CPU target)
+    bool        vnni_enabled               = true;  // [P4 / #33] AVX2-VNNI P-core vector kernels
+    bool        preset_agent               = false; // [P5 / #34] One-click agent server preset
+    bool        use_fp4                    = false; // [P6 / #35] Blackwell native FP4 / MXFP4 Tensor Core kernels
+
+    // Phase 12 & External High-Impact Integrations (Techniques #36 - #39)
+    bool        flash_attn_native_quants   = false; // [Technique #36] Direct shared-memory quantized FlashAttention (zero F16 buffer)
+    int32_t     logits_topk                = 0;     // [Technique #37] GPU Top-K logits reduction over PCIe
+    bool        turbo_mma                  = false; // [Technique #38] Fused TurboQuant MMA Tensor Core FlashAttention
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

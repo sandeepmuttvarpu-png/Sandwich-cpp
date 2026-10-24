@@ -4319,6 +4319,146 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_EARLY_EXIT_THRESH"));
     add_opt(common_arg(
+        {"--spec-pipe"},
+        "enable pipelined double-buffered speculative execution (pre-drafts tree K+1 while verifying K)",
+        [](common_params & params) {
+            params.spec_pipe = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PIPE"));
+    add_opt(common_arg(
+        {"--no-spec-pipe"},
+        "disable pipelined double-buffered speculative execution",
+        [](common_params & params) {
+            params.spec_pipe = false;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-tree-adaptive"},
+        "enable adaptive spec-tree PID controller (dynamically modulates depth [1,7] and p_split [0.05,0.40])",
+        [](common_params & params) {
+            params.spec_tree_adaptive = true;
+            params.spec_tree = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE_ADAPTIVE"));
+    add_opt(common_arg(
+        {"--no-spec-tree-adaptive"},
+        "disable adaptive spec-tree PID controller",
+        [](common_params & params) {
+            params.spec_tree_adaptive = false;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--split-kv", "--kv-vram"},
+        "allocate KV cache in GPU VRAM even when model weights run on CPU (n_gpu_layers == 0)",
+        [](common_params & params) {
+            params.split_kv = true;
+            params.no_kv_offload = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPLIT_KV"));
+    add_opt(common_arg(
+        {"--no-split-kv", "--no-kv-vram"},
+        "disable pure VRAM KV cache on CPU target models",
+        [](common_params & params) {
+            params.split_kv = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--vnni"},
+        "enable AVX2-VNNI P-core vector kernels for quantized dot products (default: true)",
+        [](common_params & params) {
+            params.vnni_enabled = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_VNNI"));
+    add_opt(common_arg(
+        {"--no-vnni"},
+        "disable AVX2-VNNI P-core vector kernels",
+        [](common_params & params) {
+            params.vnni_enabled = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--preset-agent", "--preset"}, "PRESET",
+        "apply specialized workload presets ('agent' = auto sandwich, predict solver, 4GB prefix cache, 4 slots, tool stop tokens, port 8081)",
+        [](common_params & params, const std::string & value) {
+            if (value == "agent") {
+                params.preset_agent = true;
+                params.sandwich_auto = true;
+                params.sandwich_predict = true;
+                params.cache_ram_mib = 4096;
+                params.cache_prompt = true;
+                params.cache_idle_slots = true;
+                params.n_parallel = 4;
+                params.antiprompt.push_back("<|im_end|>");
+                params.antiprompt.push_back("<|endoftext|>");
+                params.antiprompt.push_back("[TOOL_CALLS]");
+                params.antiprompt.push_back("```");
+                params.n_keep = 4;
+                params.ctx_shift = true;
+                params.port = 8081;
+            } else {
+                throw std::invalid_argument(string_format("unknown preset: '%s' (available: 'agent')", value.c_str()));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PRESET"));
+    add_opt(common_arg(
+        {"--fp4", "--mxfp4"},
+        "enable Blackwell CC 12.0 native NVFP4 / MXFP4 Tensor Core execution for draft models and hot slabs",
+        [](common_params & params) {
+            params.use_fp4 = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_FP4"));
+    add_opt(common_arg(
+        {"--flash-attn-native-quants", "-fanq"},
+        "read quantized K/V cache directly in shared memory without intermediate F16 copy (zero workspace, saves 1.25GB VRAM)",
+        [](common_params & params) {
+            params.flash_attn_native_quants = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_FLASH_ATTN_NATIVE_QUANTS"));
+    add_opt(common_arg(
+        {"--no-flash-attn-native-quants", "-nofanq"},
+        "disable direct shared-memory quantized FlashAttention",
+        [](common_params & params) {
+            params.flash_attn_native_quants = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--logits-topk"}, "K",
+        "compute top-K logits on device to reduce PCIe transfer bandwidth (default: 0 = disabled)",
+        [](common_params & params, int value) {
+            params.logits_topk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_LOGITS_TOPK"));
+    add_opt(common_arg(
+        {"--turbo-mma"},
+        "enable fused TurboQuant MMA Tensor Core FlashAttention decode (turbo4/3/2, GQA-packed)",
+        [](common_params & params) {
+            params.turbo_mma = true;
+            setenv("GGML_TURBO_MMA_FUSED", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_TURBO_MMA"));
+    add_opt(common_arg(
+        {"--no-turbo-mma"},
+        "disable fused TurboQuant MMA decode (falls back to vector kernel)",
+        [](common_params & params) {
+            params.turbo_mma = false;
+            setenv("GGML_TURBO_MMA_FUSED", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--sched-async-cpu"},
+        "overlap CPU worker thread splits with GPU CUDA stream execution",
+        [](common_params & params) {
+            params.sched_async_cpu = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SCHED_ASYNC_CPU"));
+    add_opt(common_arg(
+        {"--no-sched-async-cpu"},
+        "disable asynchronous CPU worker splits",
+        [](common_params & params) {
+            params.sched_async_cpu = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
         [](common_params & params, const std::string & value) {
