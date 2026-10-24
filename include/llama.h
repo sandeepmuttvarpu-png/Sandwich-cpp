@@ -416,6 +416,7 @@ extern "C" {
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
+        size_t moe_warm_ram_bytes; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in bytes (0 = default 12GB)
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -432,6 +433,7 @@ extern "C" {
         bool op_offload;  // offload host tensor operations to device
         bool sched_async_cpu; // run CPU graph splits on a worker thread so independent GPU splits overlap them
         bool moe_hot_only;    // skip CPU cold expert chain during speculative drafting (pure VRAM speed)
+        bool moe_3tier;       // Phase 12: Enable 3-Tier Hierarchical MoE Memory System (HOT VRAM -> WARM DDR5 -> COLD NVMe)
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573

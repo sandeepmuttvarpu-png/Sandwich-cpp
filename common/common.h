@@ -636,6 +636,8 @@ struct common_params {
     bool        flash_attn_native_quants   = false; // [Technique #36] Direct shared-memory quantized FlashAttention (zero F16 buffer)
     int32_t     logits_topk                = 0;     // [Technique #37] GPU Top-K logits reduction over PCIe
     bool        turbo_mma                  = false; // [Technique #38] Fused TurboQuant MMA Tensor Core FlashAttention
+    bool        moe_3tier                  = true;  // Phase 12: 3-Tier Hierarchical MoE Memory System (HOT VRAM -> WARM DDR5 -> COLD NVMe)
+    int32_t     moe_warm_ram_mb            = 12288; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in MiB (default: 12288)
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 

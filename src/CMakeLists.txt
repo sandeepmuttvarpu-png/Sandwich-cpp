@@ -72,6 +72,17 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+find_package(PkgConfig QUIET)
+if (PKG_CONFIG_FOUND)
+    pkg_check_modules(LIBURING QUIET liburing)
+    if (LIBURING_FOUND)
+        message(STATUS "liburing found (${LIBURING_VERSION}), enabling 3-Tier MoE io_uring DMA streaming")
+        target_include_directories(llama PRIVATE ${LIBURING_INCLUDE_DIRS})
+        target_link_libraries(llama PRIVATE ${LIBURING_LIBRARIES})
+        target_compile_definitions(llama PRIVATE GGML_USE_IO_URING)
+    endif()
+endif()
+
 find_package(OpenMP)
 if (OpenMP_CXX_FOUND)
     target_link_libraries(llama PRIVATE OpenMP::OpenMP_CXX)

@@ -2817,6 +2817,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_SLOTS"));
     add_opt(common_arg(
+        {"--moe-3tier"},
+        "enable Phase 12 3-tier hierarchical MoE memory engine (HOT VRAM -> WARM DDR5 THP -> COLD NVMe io_uring DMA) (default: enabled)",
+        [](common_params & params) {
+            params.moe_3tier = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_3TIER"));
+    add_opt(common_arg(
+        {"--no-moe-3tier"},
+        "disable Phase 12 3-tier hierarchical MoE memory engine",
+        [](common_params & params) {
+            params.moe_3tier = false;
+        }
+    ));
+    add_opt(common_arg(
+        {"--moe-warm-ram-mb"}, "N",
+        "Phase 12 Tier 2 WARM DDR5 RAM pool budget in MiB (default: 12288)",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_warm_ram_mb = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_WARM_RAM_MB"));
+    add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
         "(dense models; for MoE expert weights use --n-cpu-moe)",

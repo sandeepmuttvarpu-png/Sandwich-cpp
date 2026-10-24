@@ -8,12 +8,33 @@
 
 struct llama_model;
 
+// Phase 12: 3-Tier Hierarchical MoE Memory System
+enum class moe_tier_level : uint8_t {
+    TIER_HOT_VRAM  = 0, // In GPU VRAM bank (zero-copy compute)
+    TIER_WARM_RAM  = 1, // In pinned DDR5 host RAM (ready for PCIe DMA)
+    TIER_COLD_SSD  = 2  // On NVMe disk (requires io_uring fetch)
+};
+
+struct expert_locator {
+    moe_tier_level tier        = moe_tier_level::TIER_COLD_SSD;
+    int32_t        vram_slot   = -1;      // index in Tier 1 VRAM bank (-1 if not in VRAM)
+    int32_t        warm_slot   = -1;      // index in Tier 2 WARM pool (-1 if not in RAM)
+    void *         ram_ptr     = nullptr; // pointer in Tier 2 WARM RAM pool (nullptr if on disk)
+    size_t         file_offset = 0;       // file offset on NVMe SSD
+    size_t         bytes       = 0;       // size in bytes
+};
+
 // keeps the most recently used experts of host-resident MoE layers in a device buffer
 // each layer has a slot map in host memory: when the scheduler copies it to the device, the copy callback uploads the missing experts
 class llama_moe_cache {
 public:
     // backends are all the backends of the context, each GPU gets its own cache of the given size for the layers assigned to it
-    llama_moe_cache(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size);
+    llama_moe_cache(const llama_model & model,
+                    const std::vector<ggml_backend_t> & backends,
+                    const std::vector<ggml_backend_buffer_type_t> & bufts,
+                    size_t size,
+                    size_t warm_ram_bytes = 0,
+                    bool   moe_3tier = false);
     ~llama_moe_cache();
 
     // the device that caches layer il
@@ -41,6 +62,14 @@ public:
     // Phase 6: Query fine-grained micro-expert status and total slot capacity
     bool is_fine_grained() const;
     int32_t total_cached_slots() const;
+
+    // Phase 12: 3-Tier Hierarchical MoE Cache Engine
+    const expert_locator * get_locator(int32_t il, int32_t expert) const;
+    moe_tier_level         get_tier(int32_t il, int32_t expert) const;
+    size_t                 warm_pool_size() const;
+    size_t                 warm_pool_used() const;
+    size_t                 cold_fetches() const;
+    bool                   is_3tier_enabled() const;
 
 private:
     struct impl;

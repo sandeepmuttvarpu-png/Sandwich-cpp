@@ -55,6 +55,7 @@ struct llama_mmap {
 
     size_t size() const;
     void * addr() const;
+    int fd() const;
 
     void unmap_fragment(size_t first, size_t last);
 

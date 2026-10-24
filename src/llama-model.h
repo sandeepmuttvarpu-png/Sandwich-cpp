@@ -820,6 +820,11 @@ struct llama_model {
     virtual bool has_moe_cache_profile() const { return false; }
     virtual void repack_moe_expert_cache(const std::map<int, std::map<int, int64_t>> & /*freq*/) {}
 
+    // Phase 12: 3-Tier MoE Memory Accessors
+    int get_mmap_fd() const;
+    const void * get_mmap_addr() const;
+    bool get_mmap_info(const void * ptr, int & out_fd, size_t & out_offset) const;
+
 protected:
     llama_model_params params;
 

@@ -331,6 +331,16 @@ Launch the OpenAI-compatible server on `:8081` and let your agent write code at 
 | `--turbo-mma` | None | **Fused Turbo MMA FlashAttention (Thecodacus + TurboQuant).** Directly stages PolarQuant `turbo4/3/2` tiles into Tensor Core MMA registers. | Auto (`--sandwich-auto`) |
 | `--sched-async-cpu` | None | **Async CPU Split Worker.** Runs CPU graph splits on a dedicated worker thread pool to eliminate host compute bubbles. | Auto (`--sandwich-auto`) |
 
+---
+
+### 12. ⚡ Phase 12 3-Tier Hierarchical MoE Memory System Engine (Technique #40)
+
+| Flag | Arg | What it actually does (No Cap) | Default |
+| :--- | :---: | :--- | :---: |
+| `--moe-3tier` | None | **3-Tier Hierarchical MoE Engine.** High-throughput 3-tier memory engine: **Tier 1 (HOT VRAM @ 288 GB/s)** $\to$ **Tier 2 (WARM DDR5 @ 50 GB/s)** $\to$ **Tier 3 (COLD NVMe @ 7 GB/s)**. Unlocks massive 120B+ MoE models on 8GB laptops! | Auto (`--sandwich-auto`) |
+| `--no-moe-3tier` | None | Disables 3-tier memory engine and falls back to standard 2-tier LRU staging. | `false` |
+| `--moe-warm-ram-mb` | `N` | Dedicated Tier 2 WARM DDR5 pool size in MiB backed by 2MB Transparent Huge Pages (THP) and Linux asynchronous `io_uring` DMA. | `12288` (12 GB) |
+
 </details>
 
 ---
