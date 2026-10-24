@@ -14,6 +14,14 @@
 #include <unordered_map>
 #include <vector>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+
+#ifdef GGML_USE_IO_URING
+#include <liburing.h>
+#endif
+
 // Phase 6: Zero enum collisions verification between TurboQuant types (43-45) and IQK types (134+)
 static_assert(GGML_TYPE_TURBO4_0 == 45, "TurboQuant type enum mismatch");
 static_assert(GGML_TYPE_IQ2_KS_EXT >= 134, "IQK type collision guard failed");
@@ -83,10 +91,17 @@ struct moe_cache_lru {
         int32_t slot;
     };
 
+    struct eviction {
+        int32_t il;
+        int32_t expert;
+        int32_t slot;
+    };
+
     // give a slot to each expert selected by ids in layer il, the misses evict the least recently used experts
     // returns false if the ids select more distinct experts than there are slots
-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, size_t & n_hit) {
+    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, std::vector<eviction> & evictions, size_t & n_hit) {
         fills.clear();
+        evictions.clear();
         n_hit = 0;
 
         if (++seen_gen == 0) {
@@ -122,6 +137,7 @@ struct moe_cache_lru {
             }
             const int32_t s = head;
             if (key_of[s].il >= 0 && key_of[s].expert >= 0) {
+                evictions.push_back({ key_of[s].il, key_of[s].expert, s });
                 slot_map[key_of[s].il][key_of[s].expert] = -1;
             }
             key_of[s] = { il, e };
@@ -252,6 +268,7 @@ struct llama_moe_cache::impl {
 
     static constexpr int64_t max_batch = 32;
 
+    const llama_model * model = nullptr;
     int32_t n_expert_used;
 
     stats stats_small; // up to 8 tokens per ubatch
@@ -266,6 +283,256 @@ struct llama_moe_cache::impl {
 
     std::vector<int32_t> ids;
     std::vector<moe_cache_lru::fill> fills;
+    std::vector<moe_cache_lru::eviction> evictions;
+
+    // Phase 12: 3-Tier Hierarchical MoE Memory System Engine
+    struct moe_3tier_engine {
+        bool enabled = false;
+        bool uring_active = false;
+#ifdef GGML_USE_IO_URING
+        struct io_uring ring;
+#endif
+        void * pool_mem = nullptr;
+        size_t pool_capacity = 0;
+        size_t slot_stride = 0;
+        int32_t n_warm_slots = 0;
+        int32_t warm_slots_used = 0;
+
+        struct warm_slot_meta {
+            int32_t il = -1;
+            int32_t expert = -1;
+        };
+        std::vector<warm_slot_meta> warm_slots;
+        std::vector<int32_t> prev;
+        std::vector<int32_t> next;
+        int32_t head = -1;
+        int32_t tail = -1;
+
+        std::vector<std::vector<expert_locator>> locators;
+        std::vector<std::vector<size_t>> group_tensor_offsets;
+
+        size_t tier1_vram_hits = 0;
+        size_t tier2_ram_hits = 0;
+        size_t tier3_cold_fetches = 0;
+        size_t total_cold_bytes = 0;
+
+        void init_lru(int32_t n_slots) {
+            n_warm_slots = n_slots;
+            warm_slots_used = 0;
+            warm_slots.assign(n_slots, { -1, -1 });
+            prev.resize(n_slots);
+            next.resize(n_slots);
+            for (int32_t s = 0; s < n_slots; ++s) {
+                prev[s] = s - 1;
+                next[s] = s + 1 < n_slots ? s + 1 : -1;
+            }
+            head = n_slots > 0 ? 0 : -1;
+            tail = n_slots > 0 ? n_slots - 1 : -1;
+        }
+
+        void touch_warm(int32_t s) {
+            if (s < 0 || s >= n_warm_slots || s == tail) return;
+            if (prev[s] >= 0) {
+                next[prev[s]] = next[s];
+            } else {
+                head = next[s];
+            }
+            if (next[s] >= 0) {
+                prev[next[s]] = prev[s];
+            }
+            prev[s] = tail;
+            next[s] = -1;
+            if (tail >= 0) {
+                next[tail] = s;
+            }
+            tail = s;
+            if (head < 0) {
+                head = s;
+            }
+        }
+
+        int32_t alloc_warm_slot(int32_t il, int32_t expert) {
+            int32_t s = -1;
+            if (warm_slots_used < n_warm_slots) {
+                s = warm_slots_used++;
+                touch_warm(s);
+            } else {
+                s = head;
+                if (s >= 0 && s < n_warm_slots) {
+                    const auto & old_meta = warm_slots[s];
+                    if (old_meta.il >= 0 && old_meta.expert >= 0 &&
+                        (size_t)old_meta.il < locators.size() && (size_t)old_meta.expert < locators[old_meta.il].size()) {
+                        auto & old_loc = locators[old_meta.il][old_meta.expert];
+                        old_loc.tier = moe_tier_level::TIER_COLD_SSD;
+                        old_loc.ram_ptr = nullptr;
+                        old_loc.warm_slot = -1;
+                    }
+                    touch_warm(s);
+                }
+            }
+            if (s >= 0 && s < n_warm_slots) {
+                warm_slots[s] = { il, expert };
+            }
+            return s;
+        }
+
+        void mark_evicted_from_vram(int32_t il, int32_t expert) {
+            if (!enabled || il < 0 || (size_t)il >= locators.size() || expert < 0 || (size_t)expert >= locators[il].size()) {
+                return;
+            }
+            auto & loc = locators[il][expert];
+            loc.tier = moe_tier_level::TIER_WARM_RAM;
+            loc.vram_slot = -1;
+        }
+
+        void ensure_warm_batch(const llama_model & model, const layer & l, int32_t il, const std::vector<moe_cache_lru::fill> & fills) {
+            if (!enabled || n_warm_slots <= 0) return;
+
+            struct read_op {
+                int fd = -1;
+                void * dst = nullptr;
+                size_t len = 0;
+                size_t offset = 0;
+                const void * fallback_src = nullptr;
+            };
+            std::vector<read_op> cold_reads;
+
+            for (const auto & f : fills) {
+                int32_t e = f.expert;
+                if (il < 0 || (size_t)il >= locators.size() || e < 0 || (size_t)e >= locators[il].size()) {
+                    continue;
+                }
+                auto & loc = locators[il][e];
+                if (loc.tier == moe_tier_level::TIER_WARM_RAM || loc.tier == moe_tier_level::TIER_HOT_VRAM) {
+                    if (loc.warm_slot >= 0) {
+                        touch_warm(loc.warm_slot);
+                    }
+                    tier2_ram_hits++;
+                    continue;
+                }
+
+                int32_t s = alloc_warm_slot(il, e);
+                if (s < 0) {
+                    continue;
+                }
+                uint8_t * slot_mem = (uint8_t *)pool_mem + (size_t)s * slot_stride;
+                loc.warm_slot = s;
+                loc.ram_ptr = slot_mem;
+                loc.tier = moe_tier_level::TIER_WARM_RAM;
+                tier3_cold_fetches++;
+
+                for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+                    const ggml_tensor * w = l.experts[ip];
+                    const size_t tensor_len = w->nb[2];
+                    const size_t tensor_off = group_tensor_offsets[l.ig][ip];
+                    uint8_t * dst_ptr = slot_mem + tensor_off;
+                    const void * src_ptr = (const uint8_t *)w->data + e * tensor_len;
+
+                    int fd = -1;
+                    size_t file_offset = 0;
+                    if (!model.get_mmap_info(src_ptr, fd, file_offset)) {
+                        fd = model.get_mmap_fd();
+                        const uint8_t * mmap_addr = (const uint8_t *)model.get_mmap_addr();
+                        if (mmap_addr && (const uint8_t *)src_ptr >= mmap_addr) {
+                            file_offset = (const uint8_t *)src_ptr - mmap_addr;
+                        } else {
+                            fd = -1;
+                        }
+                    }
+                    cold_reads.push_back({ fd, dst_ptr, tensor_len, file_offset, src_ptr });
+                }
+            }
+
+            if (cold_reads.empty()) {
+                return;
+            }
+
+#ifdef GGML_USE_IO_URING
+            if (uring_active) {
+                size_t op_idx = 0;
+                while (op_idx < cold_reads.size()) {
+                    size_t batch_count = 0;
+                    while (op_idx + batch_count < cold_reads.size() && batch_count < 64) {
+                        const auto & op = cold_reads[op_idx + batch_count];
+                        if (op.fd >= 0) {
+                            struct io_uring_sqe * sqe = io_uring_get_sqe(&ring);
+                            if (!sqe) break;
+                            io_uring_prep_read(sqe, op.fd, op.dst, op.len, op.offset);
+                            io_uring_sqe_set_data(sqe, (void *)(uintptr_t)(op_idx + batch_count));
+                            batch_count++;
+                        } else {
+                            break;
+                        }
+                    }
+                    if (batch_count > 0) {
+                        int submitted = io_uring_submit(&ring);
+                        if (submitted > 0) {
+                            for (int c = 0; c < submitted; ++c) {
+                                struct io_uring_cqe * cqe = nullptr;
+                                if (io_uring_wait_cqe(&ring, &cqe) == 0 && cqe) {
+                                    uintptr_t completed_idx = (uintptr_t)io_uring_cqe_get_data(cqe);
+                                    if (cqe->res < 0 && completed_idx < cold_reads.size()) {
+                                        const auto & op = cold_reads[completed_idx];
+                                        ssize_t n = pread(op.fd, op.dst, op.len, op.offset);
+                                        if (n != (ssize_t)op.len) {
+                                            memcpy(op.dst, op.fallback_src, op.len);
+                                        }
+                                    }
+                                    io_uring_cqe_seen(&ring, cqe);
+                                }
+                            }
+                            // Any unsubmitted operations fall back to pread
+                            for (size_t b = (size_t)submitted; b < batch_count; ++b) {
+                                const auto & op = cold_reads[op_idx + b];
+                                ssize_t n = pread(op.fd, op.dst, op.len, op.offset);
+                                if (n != (ssize_t)op.len) {
+                                    memcpy(op.dst, op.fallback_src, op.len);
+                                }
+                            }
+                            op_idx += batch_count;
+                        } else {
+                            for (size_t b = 0; b < batch_count; ++b) {
+                                const auto & op = cold_reads[op_idx + b];
+                                ssize_t n = pread(op.fd, op.dst, op.len, op.offset);
+                                if (n != (ssize_t)op.len) {
+                                    memcpy(op.dst, op.fallback_src, op.len);
+                                }
+                            }
+                            op_idx += batch_count;
+                        }
+                    } else {
+                        const auto & op = cold_reads[op_idx];
+                        if (op.fd >= 0) {
+                            ssize_t n = pread(op.fd, op.dst, op.len, op.offset);
+                            if (n != (ssize_t)op.len) {
+                                memcpy(op.dst, op.fallback_src, op.len);
+                            }
+                        } else {
+                            memcpy(op.dst, op.fallback_src, op.len);
+                        }
+                        op_idx++;
+                    }
+                }
+            } else
+#endif
+            {
+                for (const auto & op : cold_reads) {
+                    if (op.fd >= 0) {
+                        ssize_t n = pread(op.fd, op.dst, op.len, op.offset);
+                        if (n != (ssize_t)op.len) {
+                            memcpy(op.dst, op.fallback_src, op.len);
+                        }
+                    } else {
+                        memcpy(op.dst, op.fallback_src, op.len);
+                    }
+                }
+            }
+
+            for (const auto & op : cold_reads) {
+                total_cold_bytes += op.len;
+            }
+        }
+    } tier_engine;
 
     // slot maps in host memory
     ggml_context_ptr ctx_host;
@@ -275,8 +542,8 @@ struct llama_moe_cache::impl {
     // views used by copy_experts
     ggml_context_ptr ctx_views;
 
-    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size) :
-            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
+    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier) :
+            model(&model), n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -548,6 +815,84 @@ struct llama_moe_cache::impl {
                 }
             }
         }
+
+        // Initialize Phase 12: 3-Tier Hierarchical MoE Memory System
+        if (moe_3tier && !groups.empty()) {
+            size_t expert_bytes = 0;
+            for (const ggml_tensor * t : groups[0].ref) {
+                expert_bytes += t->nb[2];
+            }
+            if (expert_bytes > 0) {
+                tier_engine.slot_stride = (expert_bytes + 4095) & ~((size_t)4095); // 4KB aligned
+
+                size_t target_cap = warm_ram_bytes > 0 ? warm_ram_bytes : 12ULL * 1024 * 1024 * 1024;
+                void * mem = nullptr;
+                while (target_cap >= 512ULL * 1024 * 1024) {
+                    int ret = posix_memalign(&mem, 2 * 1024 * 1024, target_cap);
+                    if (ret == 0 && mem != nullptr) {
+                        break;
+                    }
+                    target_cap = target_cap > 1024ULL * 1024 * 1024 ? target_cap - 1024ULL * 1024 * 1024 : 0;
+                }
+                if (mem == nullptr) {
+                    target_cap = 512ULL * 1024 * 1024;
+                    mem = malloc(target_cap);
+                }
+
+                if (mem != nullptr) {
+                    tier_engine.pool_mem = mem;
+                    tier_engine.pool_capacity = target_cap;
+                    int32_t n_slots = (int32_t)(target_cap / tier_engine.slot_stride);
+                    tier_engine.init_lru(n_slots);
+                    tier_engine.enabled = true;
+
+#ifdef MADV_HUGEPAGE
+                    madvise(mem, target_cap, MADV_HUGEPAGE);
+#endif
+                    LLAMA_LOG_INFO("%s: Tier 2 WARM DDR5 pool allocated: %.2f GiB (%d warm slots, 2MB THP-aligned)\n",
+                        __func__, target_cap / 1024.0 / 1024.0 / 1024.0, n_slots);
+                }
+
+#ifdef GGML_USE_IO_URING
+                int ret = io_uring_queue_init(64, &tier_engine.ring, 0);
+                if (ret == 0) {
+                    tier_engine.uring_active = true;
+                    int mmap_fd = model.get_mmap_fd();
+                    LLAMA_LOG_INFO("%s: Tier 3 io_uring DMA initialized (depth 64, fd %d)\n", __func__, mmap_fd);
+                } else {
+                    LLAMA_LOG_WARN("%s: io_uring_queue_init failed (%d): falling back to pread\n", __func__, ret);
+                }
+#endif
+
+                tier_engine.locators.resize(model.layers.size());
+                for (size_t il = 0; il < model.layers.size(); ++il) {
+                    if (layers[il].ig >= 0 && !layers[il].experts.empty()) {
+                        int32_t n_expert = groups[layers[il].ig].ref[0]->ne[2];
+                        tier_engine.locators[il].resize(n_expert);
+                        for (int32_t e = 0; e < n_expert; ++e) {
+                            auto & loc = tier_engine.locators[il][e];
+                            loc.tier = moe_tier_level::TIER_COLD_SSD;
+                            loc.bytes = expert_bytes;
+                            int dummy_fd = -1;
+                            model.get_mmap_info((const uint8_t *)layers[il].experts[0]->data + e * layers[il].experts[0]->nb[2],
+                                                dummy_fd, loc.file_offset);
+                        }
+                    }
+                }
+
+                for (size_t ig = 0; ig < groups.size(); ++ig) {
+                    std::vector<size_t> offsets;
+                    size_t cur_off = 0;
+                    for (const ggml_tensor * t : groups[ig].ref) {
+                        offsets.push_back(cur_off);
+                        cur_off += t->nb[2];
+                    }
+                    tier_engine.group_tensor_offsets.push_back(offsets);
+                }
+
+                LLAMA_LOG_INFO("%s: [Phase 12] Universal 3-Tier MoE Pinning ACTIVE (W_gate & Shared Experts in VRAM)\n", __func__);
+            }
+        }
     }
 
     ggml_backend_t backend(int32_t il) const {
@@ -556,6 +901,16 @@ struct llama_moe_cache::impl {
 
     ~impl() {
         log_stats();
+#ifdef GGML_USE_IO_URING
+        if (tier_engine.uring_active) {
+            io_uring_queue_exit(&tier_engine.ring);
+            tier_engine.uring_active = false;
+        }
+#endif
+        if (tier_engine.pool_mem) {
+            free(tier_engine.pool_mem);
+            tier_engine.pool_mem = nullptr;
+        }
     }
 
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const {
@@ -649,30 +1004,54 @@ struct llama_moe_cache::impl {
         ggml_backend_synchronize(backend);
 
         size_t n_hit = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), fills, n_hit)) {
+        if (!g.lru.plan(il, ids.data(), ids.size(), fills, evictions, n_hit)) {
             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
         }
+        for (const auto & ev : evictions) {
+            tier_engine.mark_evicted_from_vram(ev.il, ev.expert);
+        }
 
-        // upload the missing experts, consecutive experts going to consecutive slots are uploaded together
+        // upload the missing experts
         size_t bytes = 0;
-        for (size_t ip = 0; ip < l.experts.size(); ++ip) {
-            const ggml_tensor * w    = l.experts[ip];
-            ggml_tensor       * bank = g.banks[ip];
-            const size_t expert_size = w->nb[2];
-            for (size_t i = 0; i < fills.size();) {
-                size_t n = 1;
-                while (i + n < fills.size() && fills[i + n].expert == fills[i].expert + (int32_t) n && fills[i + n].slot == fills[i].slot + (int32_t) n) {
-                    n++;
+        if (tier_engine.enabled) {
+            tier_engine.ensure_warm_batch(*model, l, il, fills);
+
+            for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+                const ggml_tensor * w    = l.experts[ip];
+                ggml_tensor       * bank = g.banks[ip];
+                const size_t expert_size = w->nb[2];
+                const size_t tensor_off  = tier_engine.group_tensor_offsets[l.ig][ip];
+
+                for (const auto & f : fills) {
+                    const void * warm_src = (const uint8_t *)tier_engine.locators[il][f.expert].ram_ptr + tensor_off;
+                    const void * dma_src  = devices[g.id].pinned_ring.stage(warm_src, expert_size);
+
+                    ggml_backend_tensor_set_async(backend, bank, dma_src, f.slot * expert_size, expert_size);
+                    bytes += expert_size;
+                    tier_engine.locators[il][f.expert].tier = moe_tier_level::TIER_HOT_VRAM;
+                    tier_engine.locators[il][f.expert].vram_slot = f.slot;
                 }
-                const size_t chunk_size = n * expert_size;
-                const void * host_src = (const uint8_t *) w->data + fills[i].expert*expert_size;
+            }
+        } else {
+            for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+                const ggml_tensor * w    = l.experts[ip];
+                ggml_tensor       * bank = g.banks[ip];
+                const size_t expert_size = w->nb[2];
+                for (size_t i = 0; i < fills.size();) {
+                    size_t n = 1;
+                    while (i + n < fills.size() && fills[i + n].expert == fills[i].expert + (int32_t) n && fills[i + n].slot == fills[i].slot + (int32_t) n) {
+                        n++;
+                    }
+                    const size_t chunk_size = n * expert_size;
+                    const void * host_src = (const uint8_t *) w->data + fills[i].expert*expert_size;
 
-                // Phase 5: Zero-copy DMA streaming via pinned host memory ring buffer
-                const void * dma_src = devices[g.id].pinned_ring.stage(host_src, chunk_size);
+                    // Phase 5: Zero-copy DMA streaming via pinned host memory ring buffer
+                    const void * dma_src = devices[g.id].pinned_ring.stage(host_src, chunk_size);
 
-                ggml_backend_tensor_set_async(backend, bank, dma_src, fills[i].slot*expert_size, chunk_size);
-                bytes += chunk_size;
-                i += n;
+                    ggml_backend_tensor_set_async(backend, bank, dma_src, fills[i].slot*expert_size, chunk_size);
+                    bytes += chunk_size;
+                    i += n;
+                }
             }
         }
 
@@ -706,11 +1085,28 @@ struct llama_moe_cache::impl {
         if (stats_copy.hits > 0) {
             LLAMA_LOG_INFO("llama_moe_cache: large batches: %zu experts copied from the cache, %.2f MiB\n", stats_copy.hits, stats_copy.bytes/1024.0/1024.0);
         }
+        if (tier_engine.enabled) {
+            LLAMA_LOG_INFO("llama_moe_cache: [Phase 12 3-Tier MoE Engine Telemetry]\n");
+            LLAMA_LOG_INFO("  Tier 1 (HOT VRAM)  hits: %zu\n", stats_small.hits + stats_large.hits);
+            LLAMA_LOG_INFO("  Tier 2 (WARM RAM)  hits: %zu (pool: %.2f GiB / %.2f GiB used)\n",
+                tier_engine.tier2_ram_hits,
+                (tier_engine.warm_slots_used * tier_engine.slot_stride) / 1024.0 / 1024.0 / 1024.0,
+                tier_engine.pool_capacity / 1024.0 / 1024.0 / 1024.0);
+            LLAMA_LOG_INFO("  Tier 3 (COLD SSD)  fetches: %zu (streamed: %.2f MiB via %s)\n",
+                tier_engine.tier3_cold_fetches,
+                tier_engine.total_cold_bytes / 1024.0 / 1024.0,
+                tier_engine.uring_active ? "io_uring DMA" : "pread fallback");
+        }
     }
 };
 
-llama_moe_cache::llama_moe_cache(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size) :
-    pimpl(new impl(model, backends, bufts, size)) {
+llama_moe_cache::llama_moe_cache(const llama_model & model,
+                                 const std::vector<ggml_backend_t> & backends,
+                                 const std::vector<ggml_backend_buffer_type_t> & bufts,
+                                 size_t size,
+                                 size_t warm_ram_bytes,
+                                 bool   moe_3tier) :
+    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier)) {
 }
 
 llama_moe_cache::~llama_moe_cache() = default;
@@ -783,4 +1179,32 @@ int32_t llama_moe_cache::total_cached_slots() const {
         total += g.n_slots;
     }
     return total;
+}
+
+const expert_locator * llama_moe_cache::get_locator(int32_t il, int32_t expert) const {
+    if (!pimpl || !pimpl->tier_engine.enabled) return nullptr;
+    if (il < 0 || (size_t)il >= pimpl->tier_engine.locators.size()) return nullptr;
+    if (expert < 0 || (size_t)expert >= pimpl->tier_engine.locators[il].size()) return nullptr;
+    return &pimpl->tier_engine.locators[il][expert];
+}
+
+moe_tier_level llama_moe_cache::get_tier(int32_t il, int32_t expert) const {
+    const auto * loc = get_locator(il, expert);
+    return loc ? loc->tier : moe_tier_level::TIER_COLD_SSD;
+}
+
+size_t llama_moe_cache::warm_pool_size() const {
+    return pimpl ? pimpl->tier_engine.pool_capacity : 0;
+}
+
+size_t llama_moe_cache::warm_pool_used() const {
+    return pimpl ? (size_t)pimpl->tier_engine.warm_slots_used * pimpl->tier_engine.slot_stride : 0;
+}
+
+size_t llama_moe_cache::cold_fetches() const {
+    return pimpl ? pimpl->tier_engine.tier3_cold_fetches : 0;
+}
+
+bool llama_moe_cache::is_3tier_enabled() const {
+    return pimpl && pimpl->tier_engine.enabled;
 }

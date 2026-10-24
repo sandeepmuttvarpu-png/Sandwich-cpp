@@ -1,4 +1,5 @@
 #include "../src/llama-moe-cache-share.h"
+#include "../src/llama-moe-cache.h"
 
 #include <cmath>
 #include <cstdio>
@@ -56,8 +57,37 @@ int main() {
         ok = false;
     }
 
+    // Phase 12: 3-Tier Hierarchical MoE locator & tier state machine tests
+    expert_locator loc;
+    if (loc.tier != moe_tier_level::TIER_COLD_SSD || loc.vram_slot != -1 || loc.ram_ptr != nullptr) {
+        std::fprintf(stderr, "Phase 12: expert_locator default init failed\n");
+        ok = false;
+    }
+    // Transition to WARM
+    loc.tier = moe_tier_level::TIER_WARM_RAM;
+    loc.warm_slot = 42;
+    loc.ram_ptr = (void *)0x1000;
+    if (loc.tier != moe_tier_level::TIER_WARM_RAM || loc.warm_slot != 42 || loc.ram_ptr == nullptr) {
+        std::fprintf(stderr, "Phase 12: WARM transition failed\n");
+        ok = false;
+    }
+    // Transition to HOT
+    loc.tier = moe_tier_level::TIER_HOT_VRAM;
+    loc.vram_slot = 7;
+    if (loc.tier != moe_tier_level::TIER_HOT_VRAM || loc.vram_slot != 7) {
+        std::fprintf(stderr, "Phase 12: HOT transition failed\n");
+        ok = false;
+    }
+    // Demote on VRAM eviction back to WARM
+    loc.tier = moe_tier_level::TIER_WARM_RAM;
+    loc.vram_slot = -1;
+    if (loc.tier != moe_tier_level::TIER_WARM_RAM || loc.vram_slot != -1 || loc.ram_ptr == nullptr) {
+        std::fprintf(stderr, "Phase 12: Demote to WARM failed\n");
+        ok = false;
+    }
+
     if (ok) {
-        std::printf("test-moe-cache-shares: ALL PASS (including Phase 6 Fine-Grained MoE)\n");
+        std::printf("test-moe-cache-shares: ALL PASS (including Phase 6 Fine-Grained & Phase 12 3-Tier MoE Engine)\n");
         return 0;
     }
     return 1;

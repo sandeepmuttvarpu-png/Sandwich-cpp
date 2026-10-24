@@ -479,10 +479,11 @@ static llama_mmap::ranges ranges_complement(llama_mmap::ranges ranges, size_t li
 struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
+    int fd = -1;
 
     impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
         size = file->size();
-        int fd = file->file_id();
+        fd = dup(file->file_id());
         int flags = MAP_SHARED;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
@@ -594,6 +595,10 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
         ggml_moe_prefetch_unregister_mapping(addr);
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
@@ -706,6 +711,13 @@ llama_mmap::~llama_mmap() {
 
 size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
+int    llama_mmap::fd()   const {
+#ifdef _POSIX_MAPPED_FILES
+    return pimpl ? pimpl->fd : -1;
+#else
+    return -1;
+#endif
+}
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
 

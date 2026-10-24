@@ -2229,6 +2229,21 @@ ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM
         // blocks that are not model layers (e.g. the blocks of a head) go with the output
         buft_list_layer = (size_t) tn.bid < pimpl->dev_layer.size() ? pimpl->dev_layer.at(tn.bid).buft_list : pimpl->dev_output.buft_list;
     }
+
+    // Phase 12: Universal 3-Tier MoE Pinning
+    // 1. Permanently pin ALL router gate tensors (W_gate: ffn_gate_inp, ffn_gate_inp_shexp) in Tier 1 VRAM across ALL layers
+    // 2. Permanently pin ALL shared experts (ffn_gate_shexp, ffn_down_shexp, ffn_up_shexp) in Tier 1 VRAM across ALL layers
+    // Universally applied to DeepSeek-V2/V3, Mixtral, Qwen2MoE, DBRX, Grok, etc.
+    if (!pimpl->gpu_buft_list.empty()) {
+        const bool is_router_gate = (tn.tensor == LLM_TENSOR_FFN_GATE_INP || tn.tensor == LLM_TENSOR_FFN_GATE_INP_SHEXP);
+        const bool is_shared_expert = (tn.tensor == LLM_TENSOR_FFN_GATE_SHEXP ||
+                                      tn.tensor == LLM_TENSOR_FFN_DOWN_SHEXP ||
+                                      tn.tensor == LLM_TENSOR_FFN_UP_SHEXP);
+        if (is_router_gate || is_shared_expert) {
+            buft_list_layer = &pimpl->gpu_buft_list.begin()->second;
+        }
+    }
+
     return ml.create_tensor(
         hparams, &pimpl->cpu_buft_list, pimpl->dev_input.buft_list, pimpl->dev_output.buft_list, buft_list_layer,
         tn, ne, flags);
@@ -2582,6 +2597,40 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
 
 bool llama_model::has_tensor_overrides() const {
     return pimpl->has_tensor_overrides;
+}
+
+int llama_model::get_mmap_fd() const {
+    if (pimpl && !pimpl->mappings.empty()) {
+        return pimpl->mappings[0]->fd();
+    }
+    return -1;
+}
+
+const void * llama_model::get_mmap_addr() const {
+    if (pimpl && !pimpl->mappings.empty()) {
+        return pimpl->mappings[0]->addr();
+    }
+    return nullptr;
+}
+
+bool llama_model::get_mmap_info(const void * ptr, int & out_fd, size_t & out_offset) const {
+    out_fd = -1;
+    out_offset = 0;
+    if (!pimpl) {
+        return false;
+    }
+    const uint8_t * p = (const uint8_t *) ptr;
+    for (const auto & m : pimpl->mappings) {
+        if (!m) continue;
+        const uint8_t * base = (const uint8_t *) m->addr();
+        const size_t size = m->size();
+        if (p >= base && p < base + size) {
+            out_fd = m->fd();
+            out_offset = (size_t)(p - base);
+            return true;
+        }
+    }
+    return false;
 }
 
 const ggml_tensor * llama_model::get_tensor(const char * name) const {

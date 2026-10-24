@@ -132,6 +132,7 @@ llama_context::llama_context(
     }
     cparams.sched_async_cpu         = params.sched_async_cpu;
     cparams.moe_hot_only            = params.moe_hot_only;
+    cparams.moe_3tier               = params.moe_3tier;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
@@ -285,7 +286,9 @@ llama_context::llama_context(
 
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
-    cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_size     = params.moe_cache_size;
+    cparams.moe_warm_ram_bytes = params.moe_warm_ram_bytes;
+    cparams.moe_3tier          = params.moe_3tier;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -498,8 +501,9 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
-        if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
+        if (cparams.moe_cache_size > 0 || cparams.moe_3tier) {
+            size_t vram_cache_sz = cparams.moe_cache_size > 0 ? cparams.moe_cache_size : 256ULL * 1024 * 1024;
+            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, vram_cache_sz, cparams.moe_warm_ram_bytes, cparams.moe_3tier);
         }
 
         sched_reserve();
@@ -4266,6 +4270,7 @@ llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.moe_warm_ram_bytes          =*/ 0,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
@@ -4276,6 +4281,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.sched_async_cpu             =*/ true,
         /*.moe_hot_only                =*/ false,
+        /*.moe_3tier                   =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
         /*.samplers                    =*/ nullptr,
