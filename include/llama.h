@@ -426,6 +426,8 @@ extern "C" {
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
+        bool split_kv;    // force KV cache allocation to GPU even when n_gpu_layers == 0 (Asymmetric Split-KV engine)
+        bool flash_attn_native_quants; // read quantized KV cache directly in shared memory without intermediate F16 buffer
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
         bool sched_async_cpu; // run CPU graph splits on a worker thread so independent GPU splits overlap them
@@ -1152,6 +1154,10 @@ extern "C" {
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
+
+    // Limit candidate logits copied over PCIe to top-K on device
+    LLAMA_API void llama_set_logits_topk(struct llama_context * ctx, int32_t k);
+    LLAMA_API bool llama_get_logits_topk_active(const struct llama_context * ctx);
 
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -124,6 +125,11 @@ llama_context::llama_context(
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
+    cparams.split_kv                = params.split_kv;
+    cparams.flash_attn_native_quants = params.flash_attn_native_quants;
+    if (cparams.split_kv) {
+        cparams.offload_kqv         = true;
+    }
     cparams.sched_async_cpu         = params.sched_async_cpu;
     cparams.moe_hot_only            = params.moe_hot_only;
     cparams.no_perf                 = params.no_perf;
@@ -345,6 +351,29 @@ llama_context::llama_context(
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
             backends.emplace_back(backend);
+        }
+
+        // [P3 / #32] Asymmetric Split-KV Engine: ensure GPU backend is available for FlashAttention when split_kv is active
+        if (cparams.split_kv) {
+            bool has_gpu = false;
+            for (const auto & b : backends) {
+                if (ggml_backend_dev_type(ggml_backend_get_device(b.get())) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    has_gpu = true;
+                    break;
+                }
+            }
+            if (!has_gpu) {
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                        ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+                        if (backend) {
+                            backends.emplace_back(backend);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // add ACCEL backends (such as BLAS)
@@ -960,6 +989,142 @@ int64_t llama_context::output_resolve_row(int32_t i) const {
     return j;
 }
 
+
+bool llama_context::logits_topk_extract(ggml_backend_t backend_res, ggml_tensor * t_logits, int64_t n_outputs, int64_t n_outputs_all) {
+    if (logits_topk <= 0 || n_outputs != n_outputs_all || n_outputs <= 0) {
+        return false;
+    }
+    const int64_t n_vocab = model.vocab.n_tokens();
+
+    std::vector<std::pair<ggml_backend_t, ggml_tensor *>> shares;
+    shares.emplace_back(backend_res, t_logits);
+
+    int64_t n_rows = 0;
+    for (const auto & [backend, t] : shares) {
+        if (t == nullptr || t->type != GGML_TYPE_F32 || t->buffer == nullptr || ggml_backend_buffer_is_host(t->buffer) ||
+                t->ne[1] != n_outputs || t->ne[2] != 1 || t->ne[3] != 1 || t->nb[1] != t->ne[0]*sizeof(float)) {
+            return false;
+        }
+        n_rows += t->ne[0];
+    }
+    if (n_rows != n_vocab) {
+        return false;
+    }
+
+    const size_t n_tensors = 8*shares.size();
+    ggml_init_params params = {
+        n_tensors*ggml_tensor_overhead() + shares.size()*ggml_graph_overhead_custom(8, false),
+        nullptr,
+        true,
+    };
+    topk_ctx.reset(ggml_init(params));
+    if (topk_shares.size() != shares.size()) {
+        topk_shares.clear();
+        topk_shares.resize(shares.size());
+    }
+
+    std::vector<ggml_cgraph *> graphs;
+    std::vector<std::pair<ggml_tensor *, ggml_tensor *>> outs;
+    size_t  off  = 0;
+    int64_t row0 = 0;
+    for (size_t j = 0; j < shares.size(); ++j) {
+        auto & sh = topk_shares[j];
+        const auto & [backend, t] = shares[j];
+        ggml_context * ctx = topk_ctx.get();
+
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, t->ne[0], n_outputs);
+        x->data   = t->data;
+        x->buffer = t->buffer;
+
+        const int64_t k = std::min<int64_t>(logits_topk, t->ne[0]);
+        ggml_tensor * idx = ggml_top_k(ctx, x, (int) k);
+        ggml_tensor * val = ggml_get_rows(ctx, ggml_reshape_3d(ctx, x, 1, t->ne[0], n_outputs), idx);
+        ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8, false);
+        ggml_build_forward_expand(gf, val);
+
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(t->buffer);
+        if (!sh.galloc || sh.buft != buft) {
+            sh.galloc.reset(ggml_gallocr_new(buft));
+            sh.buft = buft;
+        }
+        if (!ggml_gallocr_alloc_graph(sh.galloc.get(), gf)) {
+            LLAMA_LOG_WARN("%s: cannot allocate the top-k graph, copying all logits\n", __func__);
+            return false;
+        }
+
+        sh.backend = backend;
+        sh.src     = x;
+        sh.row0    = row0;
+        sh.rows    = t->ne[0];
+        sh.k       = k;
+        sh.off     = off;
+        graphs.push_back(gf);
+        outs.emplace_back(idx, val);
+        off  += k*n_outputs;
+        row0 += t->ne[0];
+    }
+
+    topk_idx.resize(off);
+    topk_val.resize(off);
+    for (size_t j = 0; j < shares.size(); ++j) {
+        const auto & sh = topk_shares[j];
+        if (ggml_backend_graph_compute_async(sh.backend, graphs[j]) != GGML_STATUS_SUCCESS) {
+            GGML_ABORT("%s: the top-k graph failed", __func__);
+        }
+        ggml_backend_tensor_get_async(sh.backend, outs[j].first,  topk_idx.data() + sh.off, 0, sh.k*n_outputs*sizeof(int32_t));
+        ggml_backend_tensor_get_async(sh.backend, outs[j].second, topk_val.data() + sh.off, 0, sh.k*n_outputs*sizeof(float));
+    }
+
+    topk_active = true;
+    topk_merged = false;
+    topk_n      = (int64_t) off/n_outputs;
+    topk_graph  = n_graph_computes;
+    topk_dev_row.resize(n_outputs);
+    std::iota(topk_dev_row.begin(), topk_dev_row.end(), 0);
+    topk_row_full.assign(n_outputs, 0);
+    return true;
+}
+
+void llama_context::topk_merge() {
+    if (topk_merged) {
+        return;
+    }
+    const int64_t n_rows = (int64_t) topk_dev_row.size();
+    topk_tokens.resize(n_rows*topk_n);
+    topk_logits.resize(n_rows*topk_n);
+    for (int64_t r = 0; r < n_rows; ++r) {
+        const int64_t d = topk_dev_row[r];
+        int64_t c = r*topk_n;
+        for (const auto & sh : topk_shares) {
+            const int32_t * idx = topk_idx.data() + sh.off + d*sh.k;
+            const float   * val = topk_val.data() + sh.off + d*sh.k;
+            for (int64_t i = 0; i < sh.k; ++i, ++c) {
+                const int64_t row = sh.row0 + idx[i];
+                topk_tokens[c] = (llama_token) row;
+                topk_logits[c] = val[i];
+            }
+        }
+    }
+    topk_merged = true;
+}
+
+float * llama_context::topk_full_row(int64_t row) {
+    const int64_t n_vocab = model.vocab.n_tokens();
+    if (!topk_row_full[row]) {
+        const int64_t d = topk_dev_row[row];
+        float * dst = logits.data + row*n_vocab;
+        for (const auto & sh : topk_shares) {
+            ggml_backend_tensor_get(sh.src, dst + sh.row0, d*sh.rows*sizeof(float), sh.rows*sizeof(float));
+        }
+        topk_row_full[row] = 1;
+    }
+    return logits.data + row*n_vocab;
+}
+
+void llama_context::set_logits_topk(int32_t k) {
+    logits_topk = std::max(0, k);
+}
+
 float * llama_context::get_logits_ith(int32_t i) {
     output_reorder();
 
@@ -969,6 +1134,9 @@ float * llama_context::get_logits_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
+        if (topk_active) {
+            return topk_full_row(j);
+        }
         return logits.data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
@@ -1103,6 +1271,17 @@ float * llama_context::get_sampled_probs_ith(int32_t idx) {
 float * llama_context::get_sampled_logits_ith(int32_t idx) {
     output_reorder();
 
+    if (topk_active) {
+        try {
+            const int64_t row = output_resolve_row(idx);
+            topk_merge();
+            return topk_logits.data() + row*topk_n;
+        } catch (const std::exception & err) {
+            LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, idx, err.what());
+            return nullptr;
+        }
+    }
+
     if (!sampling.logits.has_data()) {
         return nullptr;
     }
@@ -1122,6 +1301,16 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
 const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
     output_reorder();
 
+    if (topk_active) {
+        try {
+            const int64_t row = output_resolve_row(idx);
+            topk_merge();
+            return topk_tokens.data() + row*topk_n;
+        } catch (const std::exception & err) {
+            return sampling.token_ids_full_vocab.data();
+        }
+    }
+
     try {
         const int64_t row = output_resolve_row(idx);
         if (sampling.candidates.has_data() &&
@@ -1139,6 +1328,10 @@ const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
 
 size_t llama_context::get_sampled_candidates_count(int32_t idx) {
     output_reorder();
+
+    if (topk_active) {
+        return topk_n;
+    }
 
     if (!sampling.candidates.has_data()) {
         return 0;
@@ -1158,6 +1351,10 @@ size_t llama_context::get_sampled_candidates_count(int32_t idx) {
 
 size_t llama_context::get_sampled_logits_count(int32_t idx) {
     output_reorder();
+
+    if (topk_active) {
+        return topk_n;
+    }
 
     if (!sampling.logits.has_data()) {
         return model.vocab.n_tokens();
@@ -2086,7 +2283,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                const bool last = n_tokens_prev + (int64_t) ubatch.n_tokens == (int64_t) n_tokens_all;
+                if (!logits_topk_extract(backend_res, t_logits, n_outputs_prev == 0 && last ? n_outputs : -1, n_outputs_all)) {
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                }
             }
         }
 
@@ -4070,14 +4270,16 @@ llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
+        /*.split_kv                    =*/ false,
+        /*.flash_attn_native_quants    =*/ true,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.sched_async_cpu             =*/ true,
         /*.moe_hot_only                =*/ false,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
-        /*.sampler                     =*/ nullptr,
-        /*.n_sampler                   =*/ 0,
+        /*.samplers                    =*/ nullptr,
+        /*.n_samplers                  =*/ 0,
         /*.ctx_other                   =*/ nullptr,
     };
 
@@ -4318,12 +4520,20 @@ float * llama_get_logits(llama_context * ctx) {
     return ctx->get_logits();
 }
 
+void llama_set_logits_topk(llama_context * ctx, int32_t k) {
+    ctx->set_logits_topk(k);
+}
+
+bool llama_get_logits_topk_active(const llama_context * ctx) {
+    return ctx->get_logits_topk_active();
+}
+
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     float * res = nullptr;
 
-    res = ctx->get_sampled_logits_ith(i);
+    res = ctx->get_logits_topk_active() ? nullptr : ctx->get_sampled_logits_ith(i);
 
     if (!res) {
         res = ctx->get_logits_ith(i);

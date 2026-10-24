@@ -8,6 +8,7 @@
 #include <memory>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 
 // ============================================================================
 // Phase 7: EAGLE3 / P-EAGLE Speculative Tree Decoding Subsystem
@@ -122,6 +123,84 @@ struct common_spec_tree_stats {
         n_accepted_total = 0;
         n_forward_passes = 0;
         n_emitted_total  = 0;
+    }
+};
+
+// Phase 10 / Technique #31: Adaptive Spec-Tree PID Controller
+struct common_spec_tree_pid_controller {
+    float alpha_target   = 0.75f; // Target acceptance rate (75%)
+    float kp             = 2.5f;  // Proportional gain
+    float ki             = 0.4f;  // Integral gain
+    float kd             = 0.8f;  // Derivative gain
+
+    // Rolling exponential acceptance rate over window (~16 tokens)
+    float alpha_rolling  = 0.75f;
+    float integral_err   = 0.0f;
+    float prev_err       = 0.0f;
+
+    int32_t current_depth   = 3;     // Modulated depth in [1, 7]
+    int32_t current_width   = 2;     // Tree width
+    float   current_p_split = 0.15f; // Modulated split threshold in [0.05, 0.40]
+
+    void update(int32_t n_accepted, int32_t n_drafted) {
+        if (n_drafted <= 0) return;
+        float current_rate = (float)n_accepted / (float)n_drafted;
+        const float beta = 0.875f; // 16-token EWMA
+        alpha_rolling = beta * alpha_rolling + (1.0f - beta) * current_rate;
+
+        // Positive error indicates acceptance above target (exploit: deepen tree, lower p_split)
+        // Negative error indicates acceptance below target (contract: shallow tree, higher p_split)
+        float err = alpha_rolling - alpha_target;
+        integral_err = std::clamp(integral_err + err, -3.0f, 3.0f);
+        float derivative = err - prev_err;
+        prev_err = err;
+
+        float control_signal = kp * err + ki * integral_err + kd * derivative;
+
+        // Base depth 3: modulate between [1, 7]
+        int32_t target_depth = 3 + (int32_t)std::round(control_signal);
+        current_depth = std::clamp(target_depth, 1, 7);
+
+        // Modulate split threshold: contract width on low confidence, expand on high confidence
+        float target_p_split = 0.15f - (control_signal * 0.05f);
+        current_p_split = std::clamp(target_p_split, 0.05f, 0.40f);
+    }
+
+    void reset() {
+        alpha_rolling   = alpha_target;
+        integral_err    = 0.0f;
+        prev_err        = 0.0f;
+        current_depth   = 3;
+        current_width   = 2;
+        current_p_split = 0.15f;
+    }
+};
+
+// Phase 10 / Technique #30: Pipelined Double-Buffered Speculative Execution Buffer
+struct common_spec_pipe_buffer {
+    common_spec_tree tree_buf[2];
+    llama_tokens     primary_branch[2];
+    int32_t          active_idx = 0;    // Currently verifying tree
+    int32_t          staged_idx = 1;    // Pre-computed candidate tree
+    bool             staged_valid = false;
+    llama_token      staged_expected_root = -1;
+
+    void swap() {
+        std::swap(active_idx, staged_idx);
+        staged_valid = false;
+    }
+
+    void invalidate() {
+        staged_valid = false;
+        staged_expected_root = -1;
+    }
+
+    common_spec_tree & get_active_tree() {
+        return tree_buf[active_idx];
+    }
+
+    common_spec_tree & get_staged_tree() {
+        return tree_buf[staged_idx];
     }
 };
 
