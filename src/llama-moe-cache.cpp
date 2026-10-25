@@ -28,126 +28,8 @@ static_assert(GGML_TYPE_IQ2_KS_EXT >= 134, "IQK type collision guard failed");
 
 namespace {
 
-// LRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
-struct moe_cache_lru {
-    int32_t n_expert = 0;
-    int32_t n_slots  = 0;
-
-    // Phase 6: Fast struct key to eliminate 64-bit hardware integer division on hot eviction path
-    struct slot_key {
-        int32_t il = -1;
-        int32_t expert = -1;
-    };
-
-    std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
-    std::vector<slot_key>  key_of;   // [n_slots] layer and expert key, {-1, -1} if empty
-
-    // doubly linked list of the slots, head is the least recently used
-    std::vector<int32_t> prev;
-    std::vector<int32_t> next;
-    int32_t head = -1;
-    int32_t tail = -1;
-
-    std::vector<uint32_t> seen; // [n_expert]
-    uint32_t seen_gen = 0;
-    std::vector<int32_t> uniq;
-
-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
-        this->n_expert = n_expert;
-        this->n_slots  = n_slots;
-        slot_map.assign(n_layer, nullptr);
-        key_of.assign(n_slots, { -1, -1 });
-        prev.resize(n_slots);
-        next.resize(n_slots);
-        for (int32_t s = 0; s < n_slots; ++s) {
-            prev[s] = s - 1;
-            next[s] = s + 1 < n_slots ? s + 1 : -1;
-        }
-        head = 0;
-        tail = n_slots - 1;
-        seen.assign(n_expert, 0);
-    }
-
-    // move slot s to the tail (most recently used)
-    void touch(int32_t s) {
-        if (s == tail) {
-            return;
-        }
-        if (prev[s] >= 0) {
-            next[prev[s]] = next[s];
-        } else {
-            head = next[s];
-        }
-        prev[next[s]] = prev[s];
-
-        prev[s] = tail;
-        next[s] = -1;
-        next[tail] = s;
-        tail = s;
-    }
-
-    struct fill {
-        int32_t expert;
-        int32_t slot;
-    };
-
-    struct eviction {
-        int32_t il;
-        int32_t expert;
-        int32_t slot;
-    };
-
-    // give a slot to each expert selected by ids in layer il, the misses evict the least recently used experts
-    // returns false if the ids select more distinct experts than there are slots
-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, std::vector<eviction> & evictions, size_t & n_hit) {
-        fills.clear();
-        evictions.clear();
-        n_hit = 0;
-
-        if (++seen_gen == 0) {
-            std::fill(seen.begin(), seen.end(), 0);
-            seen_gen = 1;
-        }
-        uniq.clear();
-        for (size_t i = 0; i < n_ids; ++i) {
-            GGML_ASSERT(ids[i] >= 0 && ids[i] < n_expert);
-            if (seen[ids[i]] != seen_gen) {
-                seen[ids[i]] = seen_gen;
-                uniq.push_back(ids[i]);
-            }
-        }
-        if (uniq.size() > (size_t) n_slots) {
-            return false;
-        }
-
-        int32_t * slots = slot_map[il];
-
-        // hits go to the tail first, so the head can be evicted below
-        for (int32_t e : uniq) {
-            if (slots[e] >= 0) {
-                touch(slots[e]);
-                n_hit++;
-            }
-        }
-        // sorted misses usually get consecutive slots, so the uploads can be merged
-        std::sort(uniq.begin(), uniq.end());
-        for (int32_t e : uniq) {
-            if (slots[e] >= 0) {
-                continue;
-            }
-            const int32_t s = head;
-            if (key_of[s].il >= 0 && key_of[s].expert >= 0) {
-                evictions.push_back({ key_of[s].il, key_of[s].expert, s });
-                slot_map[key_of[s].il][key_of[s].expert] = -1;
-            }
-            key_of[s] = { il, e };
-            slots[e] = s;
-            touch(s);
-            fills.push_back({ e, s });
-        }
-        return true;
-    }
-};
+// Phase 12: 2Q & Ghost-Cache Replacement Policy Engine (from llama-moe-cache-share.h)
+using moe_cache_lru = llama_moe_cache_detail::moe_cache_lru;
 
 // gate, up, down or gate_up, down
 static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer) {
@@ -541,7 +423,7 @@ struct llama_moe_cache::impl {
     // views used by copy_experts
     ggml_context_ptr ctx_views;
 
-    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier) :
+    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier, bool moe_2q) :
             model(&model), n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
@@ -688,7 +570,7 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.lru.init(model.layers.size(), n_expert, g.n_slots);
+            g.lru.init(model.layers.size(), n_expert, g.n_slots, moe_2q);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size();
         }
@@ -892,6 +774,10 @@ struct llama_moe_cache::impl {
                 LLAMA_LOG_INFO("%s: [Phase 12] Universal 3-Tier MoE Pinning ACTIVE (W_gate & Shared Experts in VRAM)\n", __func__);
             }
         }
+
+        if (moe_2q && !groups.empty()) {
+            LLAMA_LOG_INFO("%s: [Phase 12] 2Q & Ghost-Cache Replacement Policy ACTIVE (A1in: 25%% probation, Am: 75%% frequent, A1out ghost)\n", __func__);
+        }
     }
 
     ggml_backend_t backend(int32_t il) const {
@@ -1087,6 +973,24 @@ struct llama_moe_cache::impl {
         if (stats_copy.hits > 0) {
             LLAMA_LOG_INFO("llama_moe_cache: large batches: %zu experts copied from the cache, %.2f MiB\n", stats_copy.hits, stats_copy.bytes/1024.0/1024.0);
         }
+        size_t total_ghost_hits = 0;
+        size_t total_promotions_2q = 0;
+        size_t total_quarantined = 0;
+        bool any_2q = false;
+        for (const auto & g : groups) {
+            if (g.lru.use_2q) {
+                any_2q = true;
+                total_ghost_hits += g.lru.stat_ghost_hits;
+                total_promotions_2q += g.lru.stat_promotions_2q;
+                total_quarantined += g.lru.stat_pollution_quarantined;
+            }
+        }
+        if (any_2q) {
+            LLAMA_LOG_INFO("llama_moe_cache: [Phase 12 2Q & Ghost-Cache Policy Telemetry]\n");
+            LLAMA_LOG_INFO("  Ghost Cache Hits      : %zu (recurrent temporal locality recognized)\n", total_ghost_hits);
+            LLAMA_LOG_INFO("  2Q Queue Promotions   : %zu (probation A1in -> frequent Am queue)\n", total_promotions_2q);
+            LLAMA_LOG_INFO("  Pollution Quarantined : %zu (transient one-hit wonders filtered)\n", total_quarantined);
+        }
         if (tier_engine.enabled) {
             LLAMA_LOG_INFO("llama_moe_cache: [Phase 12 3-Tier MoE Engine Telemetry]\n");
             LLAMA_LOG_INFO("  Tier 1 (HOT VRAM)  hits: %zu\n", stats_small.hits + stats_large.hits);
@@ -1110,6 +1014,12 @@ struct llama_moe_cache::impl {
                 tier_engine.tier3_cold_fetches,
                 tier_engine.total_cold_bytes / 1024.0 / 1024.0,
                 tier_engine.uring_active ? "io_uring DMA" : "pread fallback");
+            if (any_2q) {
+                fprintf(stderr, "   2Q Policy Engine          : ACTIVE (Probation: 25%%, Frequent: 75%%)\n");
+                fprintf(stderr, "   2Q Ghost Cache Hits       : %10zu (Recurrent Temporal Locality)\n", total_ghost_hits);
+                fprintf(stderr, "   2Q Promotions (A1in -> Am): %10zu (Promoted to Frequent LRU)\n", total_promotions_2q);
+                fprintf(stderr, "   2Q Pollution Quarantined  : %10zu (Transient Noise Isolated)\n", total_quarantined);
+            }
             fprintf(stderr, "=======================================================\n\n");
         }
     }
@@ -1120,8 +1030,9 @@ llama_moe_cache::llama_moe_cache(const llama_model & model,
                                  const std::vector<ggml_backend_buffer_type_t> & bufts,
                                  size_t size,
                                  size_t warm_ram_bytes,
-                                 bool   moe_3tier) :
-    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier)) {
+                                 bool   moe_3tier,
+                                 bool   moe_2q) :
+    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier, moe_2q)) {
 }
 
 llama_moe_cache::~llama_moe_cache() = default;
@@ -1222,4 +1133,39 @@ size_t llama_moe_cache::cold_fetches() const {
 
 bool llama_moe_cache::is_3tier_enabled() const {
     return pimpl && pimpl->tier_engine.enabled;
+}
+
+bool llama_moe_cache::is_2q_enabled() const {
+    if (!pimpl) return false;
+    for (const auto & g : pimpl->groups) {
+        if (g.lru.use_2q) return true;
+    }
+    return false;
+}
+
+size_t llama_moe_cache::ghost_hits() const {
+    if (!pimpl) return 0;
+    size_t total = 0;
+    for (const auto & g : pimpl->groups) {
+        total += g.lru.stat_ghost_hits;
+    }
+    return total;
+}
+
+size_t llama_moe_cache::promotions_2q() const {
+    if (!pimpl) return 0;
+    size_t total = 0;
+    for (const auto & g : pimpl->groups) {
+        total += g.lru.stat_promotions_2q;
+    }
+    return total;
+}
+
+size_t llama_moe_cache::pollution_quarantined() const {
+    if (!pimpl) return 0;
+    size_t total = 0;
+    for (const auto & g : pimpl->groups) {
+        total += g.lru.stat_pollution_quarantined;
+    }
+    return total;
 }

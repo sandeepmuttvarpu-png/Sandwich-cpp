@@ -434,6 +434,7 @@ extern "C" {
         bool sched_async_cpu; // run CPU graph splits on a worker thread so independent GPU splits overlap them
         bool moe_hot_only;    // skip CPU cold expert chain during speculative drafting (pure VRAM speed)
         bool moe_3tier;       // Phase 12: Enable 3-Tier Hierarchical MoE Memory System (HOT VRAM -> WARM DDR5 -> COLD NVMe)
+        bool moe_2q;          // Phase 12: Enable 2Q & Ghost-Cache replacement policy (A1in probation + Am frequent + A1out ghost)
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573

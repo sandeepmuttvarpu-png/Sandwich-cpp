@@ -2831,6 +2831,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--moe-2q"},
+        "enable Phase 12 2Q & Ghost-Cache replacement policy (A1in probation + Am frequent + A1out ghost) (default: enabled)",
+        [](common_params & params) {
+            params.moe_2q = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_2Q"));
+    add_opt(common_arg(
+        {"--no-moe-2q"},
+        "disable Phase 12 2Q & Ghost-Cache replacement policy (revert to naive single-queue LRU)",
+        [](common_params & params) {
+            params.moe_2q = false;
+        }
+    ));
+    add_opt(common_arg(
         {"--moe-warm-ram-mb"}, "N",
         "Phase 12 Tier 2 WARM DDR5 RAM pool budget in MiB (default: 12288)",
         [](common_params & params, int value) {
