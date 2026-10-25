@@ -34,7 +34,8 @@ public:
                     const std::vector<ggml_backend_buffer_type_t> & bufts,
                     size_t size,
                     size_t warm_ram_bytes = 0,
-                    bool   moe_3tier = false);
+                    bool   moe_3tier = false,
+                    bool   moe_2q = true);
     ~llama_moe_cache();
 
     // the device that caches layer il
@@ -70,6 +71,12 @@ public:
     size_t                 warm_pool_used() const;
     size_t                 cold_fetches() const;
     bool                   is_3tier_enabled() const;
+
+    // Phase 12: 2Q & Ghost-Cache Replacement Policy Telemetry
+    bool   is_2q_enabled() const;
+    size_t ghost_hits() const;
+    size_t promotions_2q() const;
+    size_t pollution_quarantined() const;
 
 private:
     struct impl;

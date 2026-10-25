@@ -1,10 +1,18 @@
 #pragma once
 
 #include <vector>
+#include <deque>
+#include <unordered_set>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <algorithm>
 #include <stdexcept>
+
+#ifndef GGML_ASSERT
+#include <cassert>
+#define GGML_ASSERT(x) assert(x)
+#endif
 
 namespace llama_moe_cache_detail {
 
@@ -100,5 +108,372 @@ inline int32_t map_micro_expert_to_slot(int32_t expert_id, int32_t n_slots) {
     if (n_slots <= 0) return -1;
     return expert_id % n_slots;
 }
+
+// Phase 12: 2Q & Ghost-Cache Replacement Policy Engine
+enum class moe_slot_queue : uint8_t {
+    QUEUE_FREE = 0,
+    QUEUE_A1IN = 1, // Probation queue (FIFO)
+    QUEUE_AM   = 2  // Main frequent queue (LRU)
+};
+
+struct moe_cache_lru {
+    int32_t n_expert = 0;
+    int32_t n_slots  = 0;
+    bool    use_2q   = true;
+
+    // Phase 6: Fast struct key to eliminate 64-bit hardware integer division on hot eviction path
+    struct slot_key {
+        int32_t il = -1;
+        int32_t expert = -1;
+    };
+
+    struct fill {
+        int32_t expert;
+        int32_t slot;
+    };
+
+    struct eviction {
+        int32_t il;
+        int32_t expert;
+        int32_t slot;
+    };
+
+    std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
+    std::vector<slot_key>  key_of;   // [n_slots] layer and expert key, {-1, -1} if empty
+
+    // doubly linked list of the slots
+    std::vector<int32_t> prev;
+    std::vector<int32_t> next;
+
+    // standard single-queue LRU state (when use_2q == false)
+    int32_t head = -1;
+    int32_t tail = -1;
+
+    // 2Q state (when use_2q == true)
+    std::vector<moe_slot_queue> queue_of;
+    int32_t head_free = -1;
+    int32_t tail_free = -1;
+    int32_t size_free = 0;
+
+    int32_t head_in = -1;
+    int32_t tail_in = -1;
+    int32_t size_in = 0;
+
+    int32_t head_am = -1;
+    int32_t tail_am = -1;
+    int32_t size_am = 0;
+
+    int32_t k_in = 0;
+    int32_t k_am = 0;
+
+    // Ghost Cache (A1out) - metadata tracking evicted keys with zero weight storage
+    size_t max_ghost_keys = 0;
+    std::deque<uint64_t> ghost_queue;
+    std::unordered_set<uint64_t> ghost_set;
+
+    // Current batch lock tracking to prevent in-flight eviction of slots needed in the current plan() call
+    std::vector<uint32_t> slot_locked;
+    uint32_t plan_gen = 0;
+
+    // Telemetry statistics
+    size_t stat_ghost_hits = 0;
+    size_t stat_promotions_2q = 0;
+    size_t stat_pollution_quarantined = 0;
+
+    std::vector<uint32_t> seen; // [n_expert]
+    uint32_t seen_gen = 0;
+    std::vector<int32_t> uniq;
+
+    void list_remove(int32_t & l_head, int32_t & l_tail, int32_t & l_size, int32_t s) {
+        if (s < 0) return;
+        if (prev[s] >= 0) {
+            next[prev[s]] = next[s];
+        } else if (l_head == s) {
+            l_head = next[s];
+        }
+        if (next[s] >= 0) {
+            prev[next[s]] = prev[s];
+        } else if (l_tail == s) {
+            l_tail = prev[s];
+        }
+        prev[s] = -1;
+        next[s] = -1;
+        l_size--;
+    }
+
+    void list_push_tail(int32_t & l_head, int32_t & l_tail, int32_t & l_size, int32_t s) {
+        prev[s] = l_tail;
+        next[s] = -1;
+        if (l_tail >= 0) {
+            next[l_tail] = s;
+        }
+        l_tail = s;
+        if (l_head < 0) {
+            l_head = s;
+        }
+        l_size++;
+    }
+
+    int32_t list_pop_head(int32_t & l_head, int32_t & l_tail, int32_t & l_size) {
+        if (l_head < 0) return -1;
+        int32_t s = l_head;
+        list_remove(l_head, l_tail, l_size, s);
+        return s;
+    }
+
+    int32_t pop_unlocked(int32_t & l_head, int32_t & l_tail, int32_t & l_size) {
+        if (l_head < 0) return -1;
+        if (slot_locked[l_head] == plan_gen) {
+            return -1;
+        }
+        return list_pop_head(l_head, l_tail, l_size);
+    }
+
+    static inline uint64_t make_ghost_key(int32_t il, int32_t expert) {
+        return ((uint64_t)(uint32_t)il << 32) | (uint64_t)(uint32_t)expert;
+    }
+
+    bool in_ghost(int32_t il, int32_t expert) const {
+        return ghost_set.count(make_ghost_key(il, expert)) > 0;
+    }
+
+    void add_ghost(int32_t il, int32_t expert) {
+        if (il < 0 || expert < 0) return;
+        uint64_t k = make_ghost_key(il, expert);
+        if (ghost_set.insert(k).second) {
+            ghost_queue.push_back(k);
+            while (ghost_set.size() > max_ghost_keys && !ghost_queue.empty()) {
+                uint64_t oldest = ghost_queue.front();
+                ghost_queue.pop_front();
+                ghost_set.erase(oldest);
+            }
+        }
+    }
+
+    void remove_ghost(int32_t il, int32_t expert) {
+        uint64_t k = make_ghost_key(il, expert);
+        ghost_set.erase(k);
+        while (!ghost_queue.empty() && ghost_set.count(ghost_queue.front()) == 0) {
+            ghost_queue.pop_front();
+        }
+    }
+
+    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, bool use_2q = true) {
+        this->n_expert = n_expert;
+        this->n_slots  = n_slots;
+        this->use_2q   = use_2q;
+
+        slot_map.assign(n_layer, nullptr);
+        key_of.assign(n_slots, { -1, -1 });
+        prev.assign(n_slots, -1);
+        next.assign(n_slots, -1);
+        seen.assign(n_expert, 0);
+        seen_gen = 0;
+
+        stat_ghost_hits = 0;
+        stat_promotions_2q = 0;
+        stat_pollution_quarantined = 0;
+
+        if (use_2q) {
+            queue_of.assign(n_slots, moe_slot_queue::QUEUE_FREE);
+            slot_locked.assign(n_slots, 0);
+            plan_gen = 0;
+
+            head_free = -1;
+            tail_free = -1;
+            size_free = 0;
+
+            head_in = -1;
+            tail_in = -1;
+            size_in = 0;
+
+            head_am = -1;
+            tail_am = -1;
+            size_am = 0;
+
+            for (int32_t s = 0; s < n_slots; ++s) {
+                list_push_tail(head_free, tail_free, size_free, s);
+            }
+
+            k_in = std::max(1, n_slots / 4);
+            k_am = n_slots - k_in;
+            max_ghost_keys = std::max((size_t)128, std::min((size_t)n_slots * 2, (size_t)2048));
+            ghost_queue.clear();
+            ghost_set.clear();
+        } else {
+            for (int32_t s = 0; s < n_slots; ++s) {
+                prev[s] = s - 1;
+                next[s] = s + 1 < n_slots ? s + 1 : -1;
+            }
+            head = n_slots > 0 ? 0 : -1;
+            tail = n_slots > 0 ? n_slots - 1 : -1;
+        }
+    }
+
+    // Standard LRU touch (move slot s to tail)
+    void touch_lru(int32_t s) {
+        if (s == tail) return;
+        if (prev[s] >= 0) {
+            next[prev[s]] = next[s];
+        } else {
+            head = next[s];
+        }
+        prev[next[s]] = prev[s];
+
+        prev[s] = tail;
+        next[s] = -1;
+        next[tail] = s;
+        tail = s;
+    }
+
+    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, std::vector<eviction> & evictions, size_t & n_hit) {
+        fills.clear();
+        evictions.clear();
+        n_hit = 0;
+
+        if (++seen_gen == 0) {
+            std::fill(seen.begin(), seen.end(), 0);
+            seen_gen = 1;
+        }
+        uniq.clear();
+        for (size_t i = 0; i < n_ids; ++i) {
+            GGML_ASSERT(ids[i] >= 0 && ids[i] < n_expert);
+            if (seen[ids[i]] != seen_gen) {
+                seen[ids[i]] = seen_gen;
+                uniq.push_back(ids[i]);
+            }
+        }
+        if (uniq.size() > (size_t) n_slots) {
+            return false;
+        }
+
+        int32_t * slots = slot_map[il];
+
+        if (!use_2q) {
+            // Naive single-queue LRU fallback
+            for (int32_t e : uniq) {
+                if (slots[e] >= 0) {
+                    touch_lru(slots[e]);
+                    n_hit++;
+                }
+            }
+            std::sort(uniq.begin(), uniq.end());
+            for (int32_t e : uniq) {
+                if (slots[e] >= 0) {
+                    continue;
+                }
+                const int32_t s = head;
+                if (key_of[s].il >= 0 && key_of[s].expert >= 0) {
+                    evictions.push_back({ key_of[s].il, key_of[s].expert, s });
+                    slot_map[key_of[s].il][key_of[s].expert] = -1;
+                }
+                key_of[s] = { il, e };
+                slots[e] = s;
+                touch_lru(s);
+                fills.push_back({ e, s });
+            }
+            return true;
+        }
+
+        // Phase 12: 2Q & Ghost-Cache Replacement Policy
+        if (++plan_gen == 0) {
+            std::fill(slot_locked.begin(), slot_locked.end(), 0);
+            plan_gen = 1;
+        }
+
+        // Step 1: Process HITS
+        for (int32_t e : uniq) {
+            if (slots[e] >= 0) {
+                const int32_t s = slots[e];
+                n_hit++;
+                slot_locked[s] = plan_gen;
+
+                if (queue_of[s] == moe_slot_queue::QUEUE_A1IN) {
+                    // Hit while in probation: recurrent access proven -> promote to Am!
+                    list_remove(head_in, tail_in, size_in, s);
+                    list_push_tail(head_am, tail_am, size_am, s);
+                    queue_of[s] = moe_slot_queue::QUEUE_AM;
+                    stat_promotions_2q++;
+                } else if (queue_of[s] == moe_slot_queue::QUEUE_AM) {
+                    // Hit in frequent queue: touch to MRU of Am
+                    list_remove(head_am, tail_am, size_am, s);
+                    list_push_tail(head_am, tail_am, size_am, s);
+                }
+            }
+        }
+
+        // Step 2: Process MISSES
+        std::sort(uniq.begin(), uniq.end());
+        for (int32_t e : uniq) {
+            if (slots[e] >= 0) {
+                continue;
+            }
+
+            const bool is_ghost = in_ghost(il, e);
+            if (is_ghost) {
+                stat_ghost_hits++;
+                remove_ghost(il, e);
+            }
+
+            int32_t s = -1;
+            // 1. Take free slot if available
+            if (size_free > 0) {
+                s = list_pop_head(head_free, tail_free, size_free);
+            } else if (is_ghost) {
+                // Ghost hit target is Am: evict from Am if over capacity, else A1in, else Am
+                if (size_am > k_am) {
+                    s = pop_unlocked(head_am, tail_am, size_am);
+                }
+                if (s < 0 && size_in > 0) {
+                    s = pop_unlocked(head_in, tail_in, size_in);
+                }
+                if (s < 0 && size_am > 0) {
+                    s = pop_unlocked(head_am, tail_am, size_am);
+                }
+            } else {
+                // Cold miss target is A1in (probation): evict from A1in if at capacity, else Am, else A1in
+                if (size_in >= k_in) {
+                    s = pop_unlocked(head_in, tail_in, size_in);
+                }
+                if (s < 0 && size_am > 0) {
+                    s = pop_unlocked(head_am, tail_am, size_am);
+                }
+                if (s < 0 && size_in > 0) {
+                    s = pop_unlocked(head_in, tail_in, size_in);
+                }
+            }
+
+            GGML_ASSERT(s >= 0 && "MoE cache 2Q allocator could not find an unlocked slot");
+
+            const bool was_in_a1in = (queue_of[s] == moe_slot_queue::QUEUE_A1IN);
+            if (key_of[s].il >= 0 && key_of[s].expert >= 0) {
+                evictions.push_back({ key_of[s].il, key_of[s].expert, s });
+                slot_map[key_of[s].il][key_of[s].expert] = -1;
+                if (was_in_a1in) {
+                    // Evicted from probation without second reference: add key to Ghost Cache
+                    add_ghost(key_of[s].il, key_of[s].expert);
+                    stat_pollution_quarantined++;
+                }
+            }
+
+            key_of[s] = { il, e };
+            slots[e] = s;
+            slot_locked[s] = plan_gen;
+
+            if (is_ghost) {
+                // Direct promotion into Am
+                queue_of[s] = moe_slot_queue::QUEUE_AM;
+                list_push_tail(head_am, tail_am, size_am, s);
+            } else {
+                // New transient candidate into A1in (probation)
+                queue_of[s] = moe_slot_queue::QUEUE_A1IN;
+                list_push_tail(head_in, tail_in, size_in, s);
+            }
+            fills.push_back({ e, s });
+        }
+
+        return true;
+    }
+};
 
 } // namespace llama_moe_cache_detail

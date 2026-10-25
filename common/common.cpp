@@ -2694,6 +2694,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.moe_cache_size     = params.moe_cache_size;
     cparams.moe_warm_ram_bytes = (size_t) params.moe_warm_ram_mb * 1024 * 1024;
     cparams.moe_3tier          = params.moe_3tier;
+    cparams.moe_2q             = params.moe_2q;
 
     return cparams;
 }
