@@ -5167,7 +5167,19 @@ void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * tot
 }
 
 bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
-    if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
+    static int enable_host_reg = -1;
+    if (enable_host_reg == -1) {
+        const char * env = getenv("GGML_CUDA_REGISTER_HOST");
+        const char * sw_env = getenv("SANDWICH_UVM_ZERO_COPY");
+        const char * no_env = getenv("GGML_CUDA_NO_REGISTER_HOST");
+        if (no_env != nullptr && strcmp(no_env, "1") == 0) {
+            enable_host_reg = 0;
+        } else {
+            // Project Sandwich (Technique #43): Enabled by default for zero-copy PCIe DMA streaming
+            enable_host_reg = (env != nullptr || sw_env != nullptr || true) ? 1 : 0;
+        }
+    }
+    if (!enable_host_reg) {
         return false;
     }
 
@@ -5181,6 +5193,26 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
                            size / 1024.0 / 1024.0, cudaGetErrorString(err));
         return false;
     }
+
+    // Technique #43: Unified Zero-Copy Memory & UVM Prefetching (cudaMemAdvise)
+    // Advise the CUDA driver that this pinned host buffer is directly accessed by the active GPU device.
+    // On architectures with Compute Capability >= 8.0 (Ampere, Ada, Blackwell), this enables the GPU MMU
+    // to populate hardware page table entries without falling back to host page faults.
+#if CUDART_VERSION >= 11000 && !defined(GGML_USE_MUSA) && !defined(GGML_USE_HIP)
+    int device = 0;
+    if (cudaGetDevice(&device) == cudaSuccess) {
+#if CUDART_VERSION >= 12020
+        cudaMemLocation loc{};
+        loc.type = cudaMemLocationTypeDevice;
+        loc.id = device;
+        (void)cudaMemAdvise(buffer, size, cudaMemAdviseSetAccessedBy, loc);
+#else
+        (void)cudaMemAdvise(buffer, size, cudaMemAdviseSetAccessedBy, device);
+#endif
+        (void)cudaGetLastError(); // Clear error in case driver doesn't support managed advise on this page type
+    }
+#endif
+
     return true;
 #else
     GGML_UNUSED(buffer);
@@ -5190,10 +5222,6 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
 }
 
 void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
-    if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
-        return;
-    }
-
     cudaError_t err = cudaHostUnregister(buffer);
     if (err != cudaSuccess) {
         // clear the error
