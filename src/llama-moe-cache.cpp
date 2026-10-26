@@ -193,6 +193,15 @@ struct llama_moe_cache::impl {
         std::vector<std::vector<expert_locator>> locators;
         std::vector<std::vector<size_t>> group_tensor_offsets;
 
+        struct read_op {
+            int fd = -1;
+            void * dst = nullptr;
+            size_t len = 0;
+            size_t offset = 0;
+            const void * fallback_src = nullptr;
+        };
+        std::vector<read_op> cold_reads;
+
         size_t tier1_vram_hits = 0;
         size_t tier2_ram_hits = 0;
         size_t tier3_cold_fetches = 0;
@@ -270,14 +279,7 @@ struct llama_moe_cache::impl {
         void ensure_warm_batch(const llama_model & model, const layer & l, int32_t il, const std::vector<moe_cache_lru::fill> & fills) {
             if (!enabled || n_warm_slots <= 0) return;
 
-            struct read_op {
-                int fd = -1;
-                void * dst = nullptr;
-                size_t len = 0;
-                size_t offset = 0;
-                const void * fallback_src = nullptr;
-            };
-            std::vector<read_op> cold_reads;
+            cold_reads.clear();
 
             for (const auto & f : fills) {
                 int32_t e = f.expert;
@@ -352,7 +354,7 @@ struct llama_moe_cache::impl {
                                 struct io_uring_cqe * cqe = nullptr;
                                 if (io_uring_wait_cqe(&ring, &cqe) == 0 && cqe) {
                                     uintptr_t completed_idx = (uintptr_t)io_uring_cqe_get_data(cqe);
-                                    if (cqe->res < 0 && completed_idx < cold_reads.size()) {
+                                    if (completed_idx < cold_reads.size() && (cqe->res < 0 || (size_t)cqe->res != cold_reads[completed_idx].len)) {
                                         const auto & op = cold_reads[completed_idx];
                                         ssize_t n = pread(op.fd, op.dst, op.len, op.offset);
                                         if (n != (ssize_t)op.len) {
@@ -916,9 +918,11 @@ struct llama_moe_cache::impl {
 
                     ggml_backend_tensor_set_async(backend, bank, dma_src, f.slot * expert_size, expert_size);
                     bytes += expert_size;
-                    tier_engine.locators[il][f.expert].tier = moe_tier_level::TIER_HOT_VRAM;
-                    tier_engine.locators[il][f.expert].vram_slot = f.slot;
                 }
+            }
+            for (const auto & f : fills) {
+                tier_engine.locators[il][f.expert].tier = moe_tier_level::TIER_HOT_VRAM;
+                tier_engine.locators[il][f.expert].vram_slot = f.slot;
             }
         } else {
             for (size_t ip = 0; ip < l.experts.size(); ++ip) {

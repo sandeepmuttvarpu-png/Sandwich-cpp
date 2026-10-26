@@ -222,11 +222,15 @@ struct moe_cache_lru {
     }
 
     int32_t pop_unlocked(int32_t & l_head, int32_t & l_tail, int32_t & l_size) {
-        if (l_head < 0) return -1;
-        if (slot_locked[l_head] == plan_gen) {
-            return -1;
+        int32_t curr = l_head;
+        while (curr >= 0) {
+            if (slot_locked[curr] != plan_gen) {
+                list_remove(l_head, l_tail, l_size, curr);
+                return curr;
+            }
+            curr = next[curr];
         }
-        return list_pop_head(l_head, l_tail, l_size);
+        return -1;
     }
 
     static inline uint64_t make_ghost_key(int32_t il, int32_t expert) {

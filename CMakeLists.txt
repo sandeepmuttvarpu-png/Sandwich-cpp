@@ -1,8 +1,19 @@
 cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
-project("llama.cpp" C CXX)
+
+# ==============================================================================
+# Sandwich.cpp: Next-Generation Independent LLM Inference Engine
+# High-performance inference engine built on top of the ggml/llama foundational core.
+# ==============================================================================
+project("sandwich.cpp" VERSION 3.0.0 LANGUAGES C CXX)
 include(CheckIncludeFileCXX)
 
-### llama.cpp version
+### Sandwich.cpp Engine versioning
+set(SANDWICH_VERSION_MAJOR 3)
+set(SANDWICH_VERSION_MINOR 0)
+set(SANDWICH_VERSION_PATCH 0)
+set(SANDWICH_VERSION "${SANDWICH_VERSION_MAJOR}.${SANDWICH_VERSION_MINOR}.${SANDWICH_VERSION_PATCH}")
+
+### llama.cpp foundational core version
 set(LLAMA_VERSION_MAJOR 0)
 set(LLAMA_VERSION_MINOR 6)
 set(LLAMA_VERSION_PATCH 0)
@@ -20,7 +31,7 @@ else()
     set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
 endif()
 
-message(STATUS "llama.cpp version: ${LLAMA_VERSION}")
+message(STATUS "🥪 Sandwich.cpp Engine version: ${SANDWICH_VERSION} (Core foundation: llama.cpp ${LLAMA_VERSION})")
 
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)

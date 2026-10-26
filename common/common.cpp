@@ -1034,7 +1034,7 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     if (ec) {
         throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
     }
-    return cache_directory / std::filesystem::u8path(filename);
+    return cache_directory / std::filesystem::path(filename);
 }
 
 //
@@ -1658,7 +1658,6 @@ void sandwich_auto_dispatch(common_params & params) {
         }
     }
     int64_t gpu_total_vram_mb = (gpu_total_vram_b > 0) ? (int64_t)(gpu_total_vram_b / (1024 * 1024)) : 8192;
-    int64_t gpu_free_vram_mb  = (gpu_free_vram_b > 0)  ? (int64_t)(gpu_free_vram_b / (1024 * 1024))  : 7100;
 
     // Safety ceiling: 900 MB reserved for Wayland/X11 display server, OS framebuffers, and CUDA runtime context
     int64_t safe_vram_cap_mb = (gpu_total_vram_mb > 1500) ? (gpu_total_vram_mb - 900) : 7100;
@@ -1713,7 +1712,6 @@ void sandwich_auto_dispatch(common_params & params) {
     int64_t kv_turbo4_mb = (int64_t)(kv_bytes_turbo4 / (1024ULL * 1024ULL));
     int64_t kv_turbo3_mb = (int64_t)(kv_bytes_turbo3 / (1024ULL * 1024ULL));
     int64_t kv_turbo2_mb = (int64_t)(kv_bytes_turbo2 / (1024ULL * 1024ULL));
-    int64_t kv_f16_mb    = (int64_t)(kv_bytes_f16    / (1024ULL * 1024ULL));
 
     LOG_INF("\n=======================================================\n");
     LOG_INF("🥪 [Project Sandwich] Architecture-Aware Auto-Dispatcher\n");
