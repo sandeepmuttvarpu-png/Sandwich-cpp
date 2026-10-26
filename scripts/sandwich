@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Sandwich.cpp Unified CLI Dispatcher
+set -e
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLI_BIN="${BIN_DIR}/sandwich-cli"
+SERVER_BIN="${BIN_DIR}/sandwich-server"
+LIB_DIR="${BIN_DIR}/lib"
+
+# Prepend bundled lib/ to LD_LIBRARY_PATH if present
+if [ -d "${LIB_DIR}" ]; then
+    export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH:-}"
+fi
+
+case "${1:-}" in
+    run)
+        shift
+        exec "${CLI_BIN}" --sandwich-auto "$@"
+        ;;
+    serve)
+        shift
+        exec "${SERVER_BIN}" --sandwich-auto "$@"
+        ;;
+    agent)
+        shift
+        echo "🥪 Launching Sandwich.cpp Agent Server on port 8081 (--preset agent)..."
+        exec "${SERVER_BIN}" --sandwich-auto --preset agent --port 8081 --host 0.0.0.0 "$@"
+        ;;
+    status)
+        echo "======================================================================"
+        echo "🥪 Sandwich.cpp Hardware & Memory Telemetry"
+        echo "======================================================================"
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free,temperature.gpu,utilization.gpu --format=csv
+            echo ""
+        fi
+        free -h 2>/dev/null || true
+        echo "======================================================================"
+        ;;
+    help|--help|-h|"")
+        echo "🥪 Sandwich.cpp Standalone Engine"
+        echo "Usage: sandwich <run|serve|agent|status> [options]"
+        echo ""
+        echo "Subcommands:"
+        echo "  run     Run CLI inference with automated hardware dispatch (--sandwich-auto)"
+        echo "  serve   Start OpenAI-compatible API server on default port 8080"
+        echo "  agent   Start high-throughput agent server on port 8081 (--preset agent)"
+        echo "  status  Print GPU VRAM and host RAM status"
+        echo ""
+        echo "Direct Binaries:"
+        echo "  sandwich-cli    -m <model> --sandwich-auto"
+        echo "  sandwich-server -m <model> --sandwich-auto --preset agent --port 8081"
+        exit 0
+        ;;
+    *)
+        exec "${CLI_BIN}" "$@"
+        ;;
+esac
