@@ -134,6 +134,9 @@ llama_context::llama_context(
     cparams.moe_hot_only            = params.moe_hot_only;
     cparams.moe_3tier               = params.moe_3tier;
     cparams.moe_2q                  = params.moe_2q;
+    cparams.moe_gds                 = params.moe_gds;
+    cparams.latent_mla              = params.latent_mla;
+    cparams.moe_mass_thresh         = params.moe_mass_thresh;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
@@ -291,6 +294,9 @@ llama_context::llama_context(
     cparams.moe_warm_ram_bytes = params.moe_warm_ram_bytes;
     cparams.moe_3tier          = params.moe_3tier;
     cparams.moe_2q             = params.moe_2q;
+    cparams.moe_gds            = params.moe_gds;
+    cparams.latent_mla         = params.latent_mla;
+    cparams.moe_mass_thresh    = params.moe_mass_thresh;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -4273,6 +4279,7 @@ llama_context_params llama_context_default_params() {
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
         /*.moe_warm_ram_bytes          =*/ 0,
+        /*.moe_mass_thresh             =*/ 0.96f,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
@@ -4287,6 +4294,8 @@ llama_context_params llama_context_default_params() {
         /*.moe_2q                      =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.moe_gds                     =*/ false,
+        /*.latent_mla                  =*/ false,
         /*.samplers                    =*/ nullptr,
         /*.n_samplers                  =*/ 0,
         /*.ctx_other                   =*/ nullptr,

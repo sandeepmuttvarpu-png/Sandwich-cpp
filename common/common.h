@@ -640,6 +640,17 @@ struct common_params {
     bool        moe_2q                     = true;  // Phase 12: 2Q & Ghost-Cache Replacement Policy (default: true)
     int32_t     moe_warm_ram_mb            = 12288; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in MiB (default: 12288)
 
+    // Phase 13 & 14 Frontier Techniques (Techniques #43 - #52)
+    bool        uvm_zero_copy              = true;  // [Technique #43] Unified Zero-Copy Memory & UVM Prefetching
+    bool        radix_cache                = true;  // [Technique #45] Radix-Tree Persistent Prefix Caching / RadixAttention
+    int32_t     radix_cache_tokens         = 65536; // [Technique #45] Max tokens cached in Radix Tree
+    float       moe_mass_thresh            = 0.96f; // [Technique #47] Dynamic MoE Softmax Entropy Pruning (Top-K Weight Mass Throttling)
+    bool        moe_gds                    = false; // [Technique #48] GPUDirect Storage (libcufile) NVMe-to-VRAM Direct Bypass
+    bool        native_mtp                 = false; // [Technique #49] Zero-Memory Native MTP Speculative Rollout
+    bool        asym_kv_squeeze            = false; // [Technique #50] Asymmetric KV Outlier Channelling (K-Polar4 / V-Log2 Extreme Squeeze)
+    bool        chunked_prefill            = false; // [Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging
+    bool        latent_mla                 = false; // [Technique #52] Latent FlashMLA Direct Tensor Core MMA (Un-expanded Projection)
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

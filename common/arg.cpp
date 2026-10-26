@@ -4496,6 +4496,133 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sched_async_cpu = false;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    // Phase 13 & 14 Frontier Techniques (Techniques #43 - #52)
+    add_opt(common_arg(
+        {"--uvm-zero-copy"},
+        "enable Phase 13 Unified Zero-Copy Memory & UVM Prefetching (cudaMemAdviseSetAccessedBy) (default: enabled)",
+        [](common_params & params) {
+            params.uvm_zero_copy = true;
+            setenv("SANDWICH_UVM_ZERO_COPY", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_UVM_ZERO_COPY"));
+    add_opt(common_arg(
+        {"--no-uvm-zero-copy"},
+        "disable Unified Zero-Copy Memory and UVM prefetching",
+        [](common_params & params) {
+            params.uvm_zero_copy = false;
+            setenv("SANDWICH_UVM_ZERO_COPY", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--radix-cache"},
+        "enable Phase 13 Radix-Tree Persistent Prefix Caching (RadixAttention for multi-turn prefix reuse) (default: enabled)",
+        [](common_params & params) {
+            params.radix_cache = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_RADIX_CACHE"));
+    add_opt(common_arg(
+        {"--no-radix-cache"},
+        "disable Radix-Tree persistent prefix caching",
+        [](common_params & params) {
+            params.radix_cache = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--radix-cache-tokens"}, "N",
+        "maximum number of prompt prefix tokens stored in Radix Tree (default: 65536)",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.radix_cache_tokens = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_RADIX_CACHE_TOKENS"));
+    add_opt(common_arg(
+        {"--moe-mass-thresh"}, "F",
+        "Phase 14 Dynamic MoE Softmax Entropy Pruning cumulative mass threshold tau in (0.0, 1.0] (default: 0.96)",
+        [](common_params & params, const std::string & value) {
+            float val = std::stof(value);
+            if (val <= 0.0f || val > 1.0f) {
+                throw std::invalid_argument("moe-mass-thresh must be in (0.0, 1.0]");
+            }
+            params.moe_mass_thresh = val;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MOE_MASS_THRESH"));
+    add_opt(common_arg(
+        {"--moe-gds"},
+        "enable Phase 14 GPUDirect Storage (libcufile) NVMe-to-VRAM direct bypass for cold experts",
+        [](common_params & params) {
+            params.moe_gds = true;
+            setenv("GGML_CUDA_GDS", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MOE_GDS"));
+    add_opt(common_arg(
+        {"--no-moe-gds"},
+        "disable GPUDirect Storage (revert to io_uring / host buffer staging)",
+        [](common_params & params) {
+            params.moe_gds = false;
+            setenv("GGML_CUDA_GDS", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--native-mtp"},
+        "enable Phase 14 Zero-Memory Native Multi-Token Prediction (binds model native MTP heads)",
+        [](common_params & params) {
+            params.native_mtp = true;
+            params.load_mtp = true;
+            if (std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) == params.speculative.types.end()) {
+                params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_NATIVE_MTP"));
+    add_opt(common_arg(
+        {"--no-native-mtp"},
+        "disable native Multi-Token Prediction speculative rollout",
+        [](common_params & params) {
+            params.native_mtp = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--asym-kv-squeeze"},
+        "enable Phase 14 Asymmetric KV Outlier Channelling (K-Polar4 / V-Log2 extreme squeeze, 2.75 bits/tok)",
+        [](common_params & params) {
+            params.asym_kv_squeeze = true;
+            params.cache_type_k = GGML_TYPE_TURBO4_0;
+            params.cache_type_v = GGML_TYPE_TURBO2_0;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_ASYM_KV_SQUEEZE"));
+    add_opt(common_arg(
+        {"--chunked-prefill"},
+        "enable Phase 14 Chunked Context Prefill & Ping-Pong Activation Staging (caps transient VRAM < 350MB)",
+        [](common_params & params) {
+            params.chunked_prefill = true;
+            params.n_ubatch = 512;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CHUNKED_PREFILL"));
+    add_opt(common_arg(
+        {"--no-chunked-prefill"},
+        "disable chunked context prefill",
+        [](common_params & params) {
+            params.chunked_prefill = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--latent-mla", "--flash-mla"},
+        "enable Phase 14 Latent FlashMLA Direct Tensor Core MMA (fuses MLA uncompressed projection directly into MMA inner loop)",
+        [](common_params & params) {
+            params.latent_mla = true;
+            setenv("GGML_CUDA_LATENT_MLA", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_LATENT_MLA"));
+    add_opt(common_arg(
+        {"--no-latent-mla", "--no-flash-mla"},
+        "disable direct Latent FlashMLA Tensor Core MMA",
+        [](common_params & params) {
+            params.latent_mla = false;
+            setenv("GGML_CUDA_LATENT_MLA", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

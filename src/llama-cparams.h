@@ -54,6 +54,8 @@ struct llama_cparams {
     bool auto_fhc;
     bool moe_3tier;
     bool moe_2q;
+    bool moe_gds;
+    bool latent_mla;
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
@@ -63,6 +65,7 @@ struct llama_cparams {
 
     size_t moe_cache_size;
     size_t moe_warm_ram_bytes;
+    float  moe_mass_thresh;
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
