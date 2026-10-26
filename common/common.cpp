@@ -2229,6 +2229,11 @@ void sandwich_auto_dispatch(common_params & params) {
         LOG_INF("   -> [Technique #52] Latent FlashMLA Direct Tensor Core MMA ACTIVE (--latent-mla, un-expanded manifold projection)\n");
     }
 
+    if (params.speculative.types.size() > 1 || params.speculative.select) {
+        params.speculative.select = true;
+        LOG_INF("   -> [Dynamic Multi-Drafter] Dynamic Speculative Drafter Arbitration ACTIVE (--spec-select, Bayesian shadow learning)\n");
+    }
+
     params.sandwich_dispatched = true;
     LOG_INF("=======================================================\n\n");
 }

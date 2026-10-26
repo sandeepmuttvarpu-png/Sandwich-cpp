@@ -4497,6 +4497,11 @@ private:
                     SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
                 }
 
+                // --spec-select learns the draft's outcome here, before a restore (the replay reports one more)
+                if (!slot.spec_is_replay) {
+                    common_speculative_verified(spec.get(), slot.id, accepted.size() - 1, batch.size(), true);
+                }
+
                 common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
 
                 slot.spec_draft = std::move(accepted);

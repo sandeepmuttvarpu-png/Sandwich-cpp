@@ -158,6 +158,7 @@ int main(int argc, char ** argv) {
     common_batch batch_tgt(ctx_tgt);
 
     llama_tokens draft;
+    bool draft_replay = false; // draft holds the accepted tokens of the last draft after a checkpoint restore
 
     common_prompt_checkpoint ckpt;
 
@@ -479,6 +480,12 @@ int main(int argc, char ** argv) {
 
         GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
 
+        // --spec-select learns the outcome of a new draft here, before a restore (the replay reports one more)
+        if (!draft_replay) {
+            common_speculative_verified(spec, seq_id, ids.size() - 1, batch_tgt.size(), true);
+        }
+        draft_replay = false;
+
         // check for partial draft acceptance:
         // if the context doesn't support partial sequence removal, restore the checkpoint
         // and make the accepted tokens the new partial draft for the next iteration
@@ -486,6 +493,7 @@ int main(int argc, char ** argv) {
             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, n_draft);
 
             draft = std::move(ids);
+            draft_replay = true;
 
             {
                 GGML_ASSERT(ckpt.load_tgt(ctx_tgt, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));

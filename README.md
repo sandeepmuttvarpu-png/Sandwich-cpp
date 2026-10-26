@@ -100,6 +100,7 @@ Here is exactly how **Sandwich.cpp** changes the game:
   * **Asymmetric KV Outlier Channelling (Technique #50):** Channels sensitive keys to `turbo4` while compressing less sensitive values to `turbo2`, squeezing KV footprint to 2.75 bits/token.
   * **Chunked Context Prefill (Technique #51):** Ping-pong activation staging caps transient prefill VRAM under 350MB at 128k context.
   * **Latent FlashMLA Direct Tensor Core MMA (Technique #52):** Directly executes MMA on compressed MLA manifolds without uncompressing intermediate projections in global memory.
+  * **Dynamic Multi-Drafter Arbitration (`--spec-select`):** Arbitrates dynamically between multiple `--spec-type` candidates (e.g. `ngram-simple,draft-mtp`) per sequence and step using decayed Bayesian position priors, shadow draft tracking, and $E[\text{tokens}]/t_{\text{step}}$ utility maximization.
 
 ---
 

@@ -389,6 +389,10 @@ struct common_params_speculative {
 
     common_params_speculative_ngram_cache ngram_cache;
 
+    // with several types: per sequence and step, take the draft with the most expected tokens per time (acceptance
+    // per draft position and step times, learned per sequence) instead of the first one, see --spec-select
+    bool select = false;
+
     bool has_dft() const {
         return !draft.mparams.empty();
     }

@@ -383,6 +383,21 @@ Specifies a comma-separated list of speculative decoding types to use.
 ./llama-server [...] --spec-type ngram-mod,ngram-map-k4v
 ```
 
+### `--spec-select` (Dynamic Multi-Drafter Arbitration)
+
+When combining multiple `--spec-type` implementations (for example `--spec-type ngram-simple,draft-mtp` or `--spec-type ngram-simple,draft-simple`), the default upstream behavior is first-draft-wins: whichever drafter happens to match first is unconditionally accepted. On code or document generation, an n-gram draft of copied text can accelerate generation significantly, but if an n-gram draft is rejected, hybrid models pay expensive checkpoint rollback and replay penalties.
+
+Passing `--spec-select` enables **Bayesian Multi-Drafter Arbitration** (ported from Piggidragon):
+- **Per-Position Acceptance Learning:** Learns decayed trials and hits per position bucket ($0, 1, 2, 3, 4\text{--}7, 8\text{--}15, 16\text{--}31, 32+$) for each sequence.
+- **Shadow Draft Learning:** When an n-gram draft is not chosen or is truncated, the unverified tokens are kept in a "shadow draft" and compared against the subsequent generated text as tokens emerge, updating the n-gram drafter's credibility without verification overhead.
+- **Normalized Step Time Model:** Measures batch verification latency normalized by $f_{\text{verify}}(n)$ and accounts for drafter execution time $t_{\text{model}}$.
+- **Optimal Utility Objective:** Maximizes $\sum_{\text{seq}} \log \left( \frac{1 + E[\text{accepted tokens}]}{t_{\text{step}}} \right)$, automatically truncating n-gram drafts to their optimal length $k^*$ and guaranteeing no sequence suffers $>10\%$ degradation compared to model drafting alone.
+
+**Example:**
+```bash
+sandwich-server -m model.gguf -md draft.gguf --spec-type ngram-simple,draft-simple --spec-select
+```
+
 ### `--spec-ngram-*-size-n N`
 
 Sets the size N of the lookup n-gram for n-gram map based speculative decoding.

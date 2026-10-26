@@ -4741,6 +4741,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
+        {"--spec-select"},
+        "with several --spec-type: per step, each sequence uses the draft with the most expected tokens per time "
+        "(e.g. an n-gram draft of copied text where it is accepted, MTP elsewhere) instead of the first draft; the "
+        "acceptance of each draft position is learned per sequence, also from the drafts that were not used, and the "
+        "step times per number of verified tokens; no sequence is made more than 10% slower than with every one on "
+        "the model drafter (default: first draft)",
+        [](common_params & params) {
+            params.speculative.select = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SELECT"));
+    add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
         [](common_params & params, int value) {

@@ -13,6 +13,7 @@
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -2308,6 +2309,239 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     }
 };
 
+bool common_speculative_type_is_model(common_speculative_type type) {
+    return type == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE || type == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
+           type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
+           type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+}
+
+// --spec-select: per step, for each sequence the draft (an n-gram drafter's, a model drafter's, or none) such that
+// the step makes the most tokens per time over all its sequences (common_params_speculative::select). Idea after
+// Strata by @Niko1221 (MIT), which chooses between prompt lookup and its MTP drafts by their measured acceptance and
+// cost.
+struct common_speculative_selector {
+    // draft positions in buckets: 0, 1, 2, 3, 4-7, 8-15, 16-31, 32+
+    static constexpr int NB = 8;
+    static int bucket(int i) {
+        return i < 4 ? i : i < 8 ? 4 : i < 16 ? 5 : i < 32 ? 6 : 7;
+    }
+
+    // the tokens a step verifies over all sequences, in buckets: 1, 2, 3, 4, 5-8, 9-16, 17-32, 33-64, 65-128, 129+
+    static constexpr int NT = 10;
+    static int tbucket(int n) {
+        return n <= 4 ? std::max(n, 1) - 1 : n <= 8 ? 4 : n <= 16 ? 5 : n <= 32 ? 6 : n <= 64 ? 7 : n <= 128 ? 8 : 9;
+    }
+
+    // the time of a step that verifies n tokens relative to one token, the shape between measured sizes (a decode
+    // step of a 27B model on two GPUs: matrix-vector products up to 8 tokens, matrix products beyond)
+    static float f_verify(int n) {
+        static const float xs[] = { 1.0f, 3.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f };
+        static const float ys[] = { 1.00f, 1.10f, 1.51f, 1.72f, 2.15f, 3.12f, 5.30f };
+        const float x = (float) std::max(n, 1);
+        for (int i = 1; i < 7; ++i) {
+            if (x <= xs[i]) {
+                return ys[i - 1] + (ys[i] - ys[i - 1]) * (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+            }
+        }
+        return ys[6] * x / xs[6];
+    }
+
+    struct seq_state {
+        // [impl] hits and trials of each draft position bucket, decayed: the acceptance of a position given the earlier
+        // ones (a long draft adds many hits and one miss to a bucket; a running average of single outcomes would
+        // read that as a miss rate per position of the averaging weight)
+        std::vector<std::array<float, NB>> hit;
+        std::vector<std::array<float, NB>> n_try;
+        std::vector<std::array<float, NB>> acc;    // [impl] hit/n_try
+
+        int  impl    = -1;    // the draft of the current step (-1: none)
+        int  k       = 0;
+        bool stepped = false; // in the current step, not accounted yet
+
+        // the n-gram draft of this step, until the choice
+        int          cand_impl = -1;
+        llama_tokens cand;
+
+        // the draft of this step was cut by the choice and accepted up to the cut: its drafter is not told the outcome as
+        // its own (it would read a draft cut to k and fully accepted as one of its length with k accepted, e.g. ngram-mod
+        // as a low acceptance, ngram-map as the key's new draft length), see common_speculative_accept
+        bool cut      = false;
+        bool cut_full = false;
+
+        // a draft that was not used, or the part of a used draft after its truncation: compared with the text that
+        // follows, to learn its acceptance anyway
+        llama_tokens shadow;
+        int          shadow_impl = -1;
+        size_t       shadow_pos  = 0;               // prompt size when it was drafted (its first token follows id_last)
+        llama_token  shadow_last = LLAMA_TOKEN_NULL;
+        size_t       shadow_done = 0;               // positions already compared
+        size_t       shadow_from = 0;               // positions before it were verified (the used part of the draft)
+        size_t       shadow_seen = 0;               // positions learned (as the text came)
+    };
+
+    std::vector<seq_state> seqs;
+
+    // [tbucket] the time (us) of a step without its drafting, divided by f_verify of its verified tokens; 0: not measured
+    std::array<float, NT> t_norm{};
+    float t_model = 0.0f; // the time (us) of a draft call of a model drafter
+
+    // the step in flight
+    int64_t step_t0      = 0;
+    int64_t step_t_draft = 0;
+    int     step_n       = 0;     // tokens verified over its sequences
+    bool    step_equal   = false; // all its sequences verify the same number of tokens (one pass)
+    bool    step_open    = false;
+
+    static constexpr float ema     = 0.25f;
+    static constexpr float n_prior = 2.0f;
+    static constexpr float decay   = 0.9f; // per draft of the drafter: a few dozen drafts make the estimate
+
+    void init(size_t n_seq, const std::vector<std::unique_ptr<common_speculative_impl>> & impls) {
+        seqs.assign(n_seq, {});
+        for (auto & st : seqs) {
+            st.hit.resize(impls.size());
+            st.n_try.resize(impls.size());
+            st.acc.resize(impls.size());
+            for (size_t i = 0; i < impls.size(); ++i) {
+                // priors, worth n_prior trials: a model drafter often agrees with the target; an n-gram draft is a
+                // guess until it is seen
+                const float a = is_model(impls[i]->type) ? 0.7f : 0.5f;
+                st.hit[i].fill(a*n_prior);
+                st.n_try[i].fill(n_prior);
+                st.acc[i].fill(a);
+            }
+        }
+    }
+
+    static bool is_model(common_speculative_type type) {
+        return common_speculative_type_is_model(type);
+    }
+
+    // a draft of impl ii was seen up to n_seen positions, the first n_hit of them accepted; positions before from were
+    // learned already (decay: the first part learned of this draft)
+    static void learn(seq_state & st, int ii, int n_seen, int n_hit, int from = 0, bool decay_now = true) {
+        if (decay_now) {
+            for (int b = 0; b < NB; ++b) {
+                st.hit[ii][b]   *= decay;
+                st.n_try[ii][b] *= decay;
+            }
+        }
+        for (int i = from; i < n_seen; ++i) {
+            st.hit[ii][bucket(i)]   += i < n_hit ? 1.0f : 0.0f;
+            st.n_try[ii][bucket(i)] += 1.0f;
+        }
+        for (int b = 0; b < NB; ++b) {
+            st.acc[ii][b] = st.n_try[ii][b] > 0.0f ? st.hit[ii][b] / st.n_try[ii][b] : 0.0f;
+        }
+    }
+
+    // expected accepted tokens of the first k positions of a draft of impl ii
+    float expected(const seq_state & st, int ii, int k) const {
+        float e = 0.0f;
+        float run = 1.0f;
+        for (int i = 0; i < k; ++i) {
+            run *= st.acc[ii][bucket(i)];
+            e += run;
+        }
+        return e;
+    }
+
+    // the time (us) of a step that verifies n tokens, without the drafting: measured for n's bucket, else the nearest
+    // measured bucket scaled by f_verify; 0 if nothing is measured yet
+    float verify_time(int n) const {
+        const int b0 = tbucket(n);
+        for (int d = 0; d < NT; ++d) {
+            for (int b : { b0 - d, b0 + d }) {
+                if (b >= 0 && b < NT && t_norm[b] > 0.0f) {
+                    return t_norm[b] * f_verify(n);
+                }
+            }
+        }
+        return 0.0f;
+    }
+
+    // the time (us) of a step whose sequences verify the given numbers of tokens, without the drafting. A recurrent or
+    // hybrid model splits a batch into ubatches with the same number of tokens per sequence: sequences of different
+    // lengths take several passes over the model (and so a long draft of one sequence costs the others a pass); a
+    // model without recurrent layers does it in one, so this is an upper bound there
+    float step_time(std::vector<int> lens) const {
+        std::sort(lens.begin(), lens.end());
+        float t = 0.0f;
+        int prev = 0;
+        for (size_t j = 0; j < lens.size(); ++j) {
+            if (lens[j] == prev) {
+                continue;
+            }
+            const int n = (lens[j] - prev) * (int) (lens.size() - j);
+            const float tp = verify_time(n);
+            if (tp <= 0.0f) {
+                return 0.0f;
+            }
+            t += tp;
+            prev = lens[j];
+        }
+        return t;
+    }
+
+    // compare a pending shadow draft with the text that followed it: prompt plus the token sampled last
+    void resolve_shadow(seq_state & st, const llama_tokens & prompt, llama_token id_last) {
+        if (st.shadow.empty()) {
+            return;
+        }
+        if (prompt.size() < st.shadow_pos || (prompt.size() > st.shadow_pos && prompt[st.shadow_pos] != st.shadow_last)) {
+            st.shadow.clear(); // another text (e.g. a new request)
+            return;
+        }
+        // the tokens after id_last of the draft step: prompt[shadow_pos + 1 ..] and then id_last
+        auto text_at = [&](size_t j) -> llama_token {
+            const size_t i = st.shadow_pos + 1 + j;
+            return i < prompt.size() ? prompt[i] : i == prompt.size() ? id_last : LLAMA_TOKEN_NULL;
+        };
+        bool miss = false;
+        bool more = false; // the text has not passed the draft yet: compared on at the next step
+        while (st.shadow_done < st.shadow.size()) {
+            const llama_token t = text_at(st.shadow_done);
+            if (t == LLAMA_TOKEN_NULL) {
+                more = true;
+                break;
+            }
+            if (t != st.shadow[st.shadow_done]) {
+                miss = true;
+                break;
+            }
+            st.shadow_done++;
+        }
+        // the draft as if it had been used: shadow_done positions accepted, the next one (if any) rejected. Learned as
+        // the text comes: a long draft of copied text would teach nothing for many steps otherwise. A miss in the
+        // verified part of a used draft was learned by its step
+        const int n_hit  = (int) st.shadow_done;
+        const int n_seen = miss ? n_hit + 1 : n_hit;
+        const int from   = (int) std::max(st.shadow_from, st.shadow_seen);
+        if (n_seen > from) {
+            learn(st, st.shadow_impl, n_seen, n_hit, from, st.shadow_from == 0 && st.shadow_seen == 0);
+            st.shadow_seen = n_seen;
+        }
+        if (!more) {
+            st.shadow.clear();
+        }
+    }
+
+    // from > 0: the draft was used up to position from, the rest is learned from the text
+    void keep_shadow(seq_state & st, int ii, const llama_tokens & draft, const common_speculative_draft_params & dp,
+            size_t from = 0) {
+        if (!st.shadow.empty() || draft.size() <= from) {
+            return;
+        }
+        st.shadow      = draft;
+        st.shadow_impl = ii;
+        st.shadow_pos  = dp.prompt ? dp.prompt->size() : 0;
+        st.shadow_last = dp.id_last;
+        st.shadow_done = 0;
+        st.shadow_from = from;
+        st.shadow_seen = 0;
+    }
+};
+
 struct common_speculative {
     common_speculative_draft_params_vec dparams;
 
@@ -2318,6 +2552,9 @@ struct common_speculative {
     std::vector<common_speculative_impl *> impl_last;
 
     std::vector<double> synth_probs;
+
+    // --spec-select, nullptr otherwise
+    std::unique_ptr<common_speculative_selector> select;
 };
 
 static common_ngram_map get_common_ngram_map(
@@ -2869,7 +3106,18 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         /* .impls       = */ std::move(impls),
         /* .impl_last   = */ std::vector<common_speculative_impl *>(n_seq, nullptr),
         /* .synth_probs = */ {},
+        /* .select      = */ nullptr,
     });
+
+    if (params.select) {
+        if (result->impls.size() < 2) {
+            SPC_WRN("%s", "--spec-select needs several speculative types, it is not used\n");
+        } else {
+            result->select = std::make_unique<common_speculative_selector>();
+            result->select->init(n_seq, result->impls);
+            SPC_INF("%s", "--spec-select: each step takes the draft with the most expected tokens per time\n");
+        }
+    }
 
     const int32_t n_max_configured = common_speculative_n_max(&params);
     const int32_t n_max_effective  = common_speculative_n_max(result.get());
@@ -2921,6 +3169,12 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
         return;
     }
 
+    if (spec->select) {
+        auto & st = spec->select->seqs[seq_id];
+        st.shadow.clear();
+        st.stepped = false;
+    }
+
     for (auto & impl : spec->impls) {
         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
         impl->begin(seq_id, prompt);
@@ -2940,6 +3194,183 @@ bool common_speculative_process(common_speculative * spec, const common_batch & 
     }
 
     return result;
+}
+
+// --spec-select: the choice for the sequences with an n-gram draft (st.cand) before the model drafter ii_model (-1:
+// none) drafts the others. Each sequence takes its n-gram draft (truncated) or the model draft (none without a model
+// drafter); the choices maximize the sum over the step's sequences of log(tokens / step time), so a long draft of one
+// sequence pays for the time it adds to the step of the others.
+static void common_speculative_select_choose(common_speculative * spec, int ii_model) {
+    auto * sel = spec->select.get();
+    auto & dparams = spec->dparams;
+    const int n_seq = (int) dparams.size();
+
+    // the drafting sequences, and those with a candidate
+    std::vector<int> d_seqs;
+    std::vector<int> c_seqs;
+    for (int s = 0; s < n_seq; ++s) {
+        if (dparams[s].drafting) {
+            d_seqs.push_back(s);
+            if (sel->seqs[s].cand_impl >= 0) {
+                c_seqs.push_back(s);
+            }
+        }
+    }
+    if (c_seqs.empty()) {
+        return;
+    }
+
+    auto k_model_of = [&](int s) {
+        if (ii_model < 0) {
+            return 0;
+        }
+        const int k = spec->impls[ii_model]->n_max;
+        return dparams[s].n_max > 0 ? std::min(k, dparams[s].n_max) : k;
+    };
+    auto e_model_of = [&](int s) {
+        return ii_model < 0 ? 0.0f : sel->expected(sel->seqs[s], ii_model, k_model_of(s));
+    };
+
+    // the base: every drafting sequence on the model drafter (or without a draft)
+    int n_base = 0;
+    for (int s : d_seqs) {
+        n_base += k_model_of(s) + 1;
+    }
+
+    // without measurements, all candidates are taken (the first draft, as without --spec-select)
+    const bool known = sel->verify_time(1) > 0.0f && (ii_model < 0 || sel->t_model > 0.0f);
+
+    // the best length of each candidate, with the others on the model drafter
+    const size_t n_c = std::min<size_t>(c_seqs.size(), 10);
+    std::vector<int>   k_c(c_seqs.size(), 0);
+    std::vector<float> e_c(c_seqs.size(), 0.0f);
+    for (size_t i = 0; i < c_seqs.size(); ++i) {
+        const int s = c_seqs[i];
+        const auto & st = sel->seqs[s];
+        std::vector<int> lens;
+        for (int o : d_seqs) {
+            lens.push_back(o == s ? 0 : k_model_of(o) + 1);
+        }
+        const size_t i_s = std::find(d_seqs.begin(), d_seqs.end(), s) - d_seqs.begin();
+        float r_best = -1.0f;
+        for (int k = 1; k <= (int) st.cand.size(); ++k) {
+            const float e = sel->expected(st, st.cand_impl, k);
+            lens[i_s] = k + 1;
+            const float t = sel->step_time(lens);
+            const float r = t > 0.0f ? (1.0f + e) / t : e;
+            if (r > r_best) {
+                r_best = r;
+                k_c[i] = k;
+                e_c[i] = e;
+            }
+        }
+    }
+
+    // the choices: bit i set = c_seqs[i] takes its n-gram draft. A choice may not make any sequence more than
+    // max_loss slower than with every sequence on the model drafter: a long draft of one conversation must not slow
+    // the others down (with a recurrent or hybrid model it costs them a pass over the model)
+    constexpr float max_loss = 0.1f;
+    uint32_t best_mask = (1u << n_c) - 1;
+    if (known) {
+        std::vector<int> lens0;
+        for (int s : d_seqs) {
+            lens0.push_back(k_model_of(s) + 1);
+        }
+        const float t0 = sel->step_time(lens0) + (ii_model >= 0 ? sel->t_model : 0.0f);
+
+        float obj_best = -1e30f;
+        best_mask = 0;
+        for (uint32_t mask = 0; mask < (1u << n_c); ++mask) {
+            // index + 1 of the candidate that s takes, 0 if it is on the model drafter
+            auto takes = [&](int s) -> int {
+                for (size_t i = 0; i < n_c; ++i) {
+                    if (c_seqs[i] == s) {
+                        return (mask >> i & 1) ? (int) i + 1 : 0;
+                    }
+                }
+                return 0;
+            };
+            std::vector<int> lens;
+            bool model_used = false;
+            for (int s : d_seqs) {
+                const int t = takes(s);
+                if (t > 0) {
+                    lens.push_back(k_c[t - 1] + 1);
+                } else {
+                    lens.push_back(k_model_of(s) + 1);
+                    model_used |= ii_model >= 0;
+                }
+            }
+            const float t_step = sel->step_time(lens) + (model_used ? sel->t_model : 0.0f);
+            float obj = 0.0f;
+            bool  fair = true;
+            for (int s : d_seqs) {
+                const int t = takes(s);
+                const float tokens = 1.0f + (t > 0 ? e_c[t - 1] : e_model_of(s));
+                obj += std::log(tokens / t_step);
+                fair &= tokens / t_step >= (1.0f - max_loss) * (1.0f + e_model_of(s)) / t0;
+            }
+            if ((fair || mask == 0) && obj > obj_best) {
+                obj_best  = obj;
+                best_mask = mask;
+            }
+        }
+    }
+
+    if (LOG_LEVEL_DEBUG <= common_log_get_verbosity_thold()) {
+        std::string desc;
+        for (size_t i = 0; i < c_seqs.size(); ++i) {
+            desc += string_format(" seq %d: cand %zu k %d e %.2f e_model %.2f%s;", c_seqs[i], sel->seqs[c_seqs[i]].cand.size(), k_c[i], e_c[i],
+                    e_model_of(c_seqs[i]), (best_mask >> i & 1) ? " TAKE" : "");
+        }
+        SPC_DBG("choose: %zu drafting, n_base %d, t(n_base) %.0f us, t_model %.0f us, known %d:%s\n",
+                d_seqs.size(), n_base, sel->verify_time(n_base), sel->t_model, (int) known, desc.c_str());
+    }
+
+    for (size_t i = 0; i < c_seqs.size(); ++i) {
+        const int s = c_seqs[i];
+        auto & dp = dparams[s];
+        auto & st = sel->seqs[s];
+        const bool take = i < n_c && (best_mask >> i & 1);
+        if (take) {
+            auto & result = *dp.result;
+            result = st.cand;
+            if (known && k_c[i] < (int) result.size()) {
+                result.resize(k_c[i]);
+            }
+            if (dp.n_max > 0 && (int) result.size() > dp.n_max) {
+                result.resize(dp.n_max);
+            }
+            auto & impl = spec->impls[st.cand_impl];
+            spec->impl_last[s] = impl.get();
+            impl->n_gen_drafts++;
+            impl->n_gen_tokens += result.size();
+            st.impl = st.cand_impl;
+            st.k    = (int) result.size();
+            st.cut  = result.size() < st.cand.size();
+            if (st.shadow_impl == st.cand_impl && st.shadow_from == 0) {
+                st.shadow.clear(); // an unused draft of this drafter: its draft is used now
+            }
+            // a draft cut to the length its learned acceptance pays for: the positions after the cut are learned from
+            // the text that follows, else the chooser would never see whether a longer draft pays
+            if (result.size() < st.cand.size()) {
+                llama_tokens full = st.cand;
+                if (dp.n_max > 0 && (int) full.size() > dp.n_max) {
+                    full.resize(dp.n_max);
+                }
+                sel->keep_shadow(st, st.cand_impl, full, dp, result.size());
+            }
+            dp.drafting = false;
+        } else {
+            sel->keep_shadow(st, st.cand_impl, st.cand, dp);
+            SPC_DBG("seq %d: %s draft of %zu not used\n", s,
+                    common_speculative_type_to_str(spec->impls[st.cand_impl]->type).c_str(), st.cand.size());
+            // the model drafter drafts it as without the n-gram draft; no draft only without one
+            dp.drafting = ii_model >= 0;
+        }
+        st.cand_impl = -1;
+        st.cand.clear();
+    }
 }
 
 void common_speculative_draft(common_speculative * spec) {
@@ -2965,11 +3396,56 @@ void common_speculative_draft(common_speculative * spec) {
         }
     }
 
-    for (auto & impl : spec->impls) {
+    auto * sel = spec->select.get();
+    const int64_t t_draft_start = ggml_time_us();
+    std::vector<int> d_seqs; // --spec-select: the sequences of this step
+    if (sel) {
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+            auto & st = sel->seqs[seq_id];
+            if (dp.prompt) {
+                sel->resolve_shadow(st, *dp.prompt, dp.id_last);
+            }
+            st.impl      = -1;
+            st.k         = 0;
+            st.cut       = false;
+            st.cut_full  = false;
+            st.stepped   = true;
+            st.cand_impl = -1;
+            st.cand.clear();
+            spec->impl_last[seq_id] = nullptr;
+            d_seqs.push_back(seq_id);
+        }
+    }
+    bool chosen = false;
+
+    for (size_t ii = 0; ii < spec->impls.size(); ++ii) {
+        auto & impl = spec->impls[ii];
+
+        const bool is_model = common_speculative_selector::is_model(impl->type);
+
+        // --spec-select: the n-gram drafts are in, the choice is made before the model drafter runs
+        if (sel && is_model && !chosen) {
+            common_speculative_select_choose(spec, (int) ii);
+            chosen = true;
+            // every sequence took its n-gram draft: no model draft (its time would teach t_model a call without work)
+            if (std::none_of(dparams.begin(), dparams.end(), [](const auto & dp) { return dp.drafting; })) {
+                break;
+            }
+        }
+
         {
+            const int64_t t0 = ggml_time_us();
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
             impl->draft(dparams);
             impl->n_call_draft++;
+            if (sel && is_model) {
+                const float t = (float) (ggml_time_us() - t0);
+                sel->t_model = sel->t_model > 0.0f ? sel->t_model + common_speculative_selector::ema*(t - sel->t_model) : t;
+            }
         }
 
         int n_drafting = 0;
@@ -2982,6 +3458,20 @@ void common_speculative_draft(common_speculative * spec) {
             }
 
             auto & result = *dp.result;
+
+            // --spec-select: an n-gram draft is a candidate until the choice; a later n-gram drafter may offer one
+            // with more expected tokens
+            if (sel && !is_model && !result.empty()) {
+                auto & st = sel->seqs[seq_id];
+                if (st.cand_impl < 0 ||
+                        sel->expected(st, (int) ii, (int) result.size()) > sel->expected(st, st.cand_impl, (int) st.cand.size())) {
+                    st.cand_impl = (int) ii;
+                    st.cand      = result;
+                }
+                result.clear();
+                n_drafting++;
+                continue;
+            }
 
             // a new draft has been sampled
             if (dp.drafting && !result.empty()) {
@@ -3009,6 +3499,11 @@ void common_speculative_draft(common_speculative * spec) {
 
                     impl->n_gen_drafts++;
                     impl->n_gen_tokens += result.size();
+
+                    if (sel) {
+                        sel->seqs[seq_id].impl = (int) ii;
+                        sel->seqs[seq_id].k    = (int) result.size();
+                    }
                 }
             }
 
@@ -3022,6 +3517,11 @@ void common_speculative_draft(common_speculative * spec) {
         }
     }
 
+    // --spec-select without a model drafter: the candidates against no draft
+    if (sel && !chosen) {
+        common_speculative_select_choose(spec, -1);
+    }
+
     // these sequences failed to generate a draft
     for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
         auto & dp = dparams[seq_id];
@@ -3029,6 +3529,56 @@ void common_speculative_draft(common_speculative * spec) {
         if (dp.drafting) {
             dp.drafting = false;
         }
+    }
+
+    if (sel) {
+        sel->step_t0      = t_draft_start;
+        sel->step_t_draft = ggml_time_us() - t_draft_start;
+        sel->step_n       = 0;
+        sel->step_equal   = true;
+        for (int s : d_seqs) {
+            const int len = (int) dparams[s].result->size() + 1;
+            sel->step_n     += len;
+            sel->step_equal &= len == (int) dparams[d_seqs[0]].result->size() + 1;
+        }
+        sel->step_open = true;
+    }
+}
+
+// --spec-select: account the step of a sequence (its draft, n_accepted of it accepted); the first sequence of a step
+// accounts the step's time
+static void common_speculative_select_step(common_speculative * spec, llama_seq_id seq_id, int n_accepted, int n_batch, bool clean) {
+    auto * sel = spec->select.get();
+    auto & st  = sel->seqs[seq_id];
+    if (!st.stepped) {
+        return;
+    }
+    st.stepped = false;
+
+    if (st.impl >= 0) {
+        common_speculative_selector::learn(st, st.impl, std::min(st.k, n_accepted + 1), n_accepted);
+    }
+    st.cut_full = st.cut && n_accepted >= st.k;
+
+    if (sel->step_open) {
+        sel->step_open = false;
+        const float t = (float) std::max<int64_t>(0, ggml_time_us() - sel->step_t0 - sel->step_t_draft);
+        // the time per token count is learned from the steps of one pass (see step_time) whose batch holds the step's
+        // drafts and nothing else: no prompt tokens or replays of other sequences, no prompt computed alongside
+        const bool learn = sel->step_equal && clean && n_batch == sel->step_n;
+        SPC_DBG("step: n %d, equal %d, batch %d, clean %d, %.0f us (draft %lld us), seq %d accepted %d of %d\n", sel->step_n,
+                (int) sel->step_equal, n_batch, (int) clean, t, (long long) sel->step_t_draft, seq_id, n_accepted, st.k);
+        if (learn) {
+            const float x = t / common_speculative_selector::f_verify(sel->step_n);
+            float & v = sel->t_norm[common_speculative_selector::tbucket(sel->step_n)];
+            v = v > 0.0f ? v + common_speculative_selector::ema*(x - v) : x;
+        }
+    }
+}
+
+void common_speculative_verified(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted, int32_t n_batch, bool clean) {
+    if (spec != nullptr && spec->select) {
+        common_speculative_select_step(spec, seq_id, n_accepted, n_batch, clean);
     }
 }
 
@@ -3056,7 +3606,15 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
             impl->n_acc_tokens += n_accepted;
         }
 
-        impl->accept(seq_id, n_accepted, false);
+        // --spec-select: a draft cut by the choice and accepted up to the cut does not tell its drafter how its own draft
+        // would have done (see seq_state::cut_full)
+        bool own = true;
+        if (spec->select) {
+            auto & st = spec->select->seqs[seq_id];
+            own = !st.cut_full;
+            st.cut_full = false;
+        }
+        impl->accept(seq_id, n_accepted, !own);
         impl->n_call_accept++;
     }
 
