@@ -161,34 +161,53 @@ Here is exactly how **Sandwich.cpp** changes the game:
 
 ---
 
-## 🛠️ Just Run It (One-Liner Magic)
+## 🚀 The Lazy Person's Guide (How to Install & Run in 5 Seconds)
 
-### 1. Build from Source
+> ### *"Bro I am NOT reading 500 lines of CMake warnings just to chat with an AI."* 💀  
+> Say less. We cooked up an installer so effortless even your friend who uses Windows could run it without crying. 😭🔥
+
+### 1. The Literal One-Liner (No Compiler Needed)
+Yeet this straight into your terminal. It checks your GPU, auto-detects CUDA vs. AVX2-VNNI CPU, grabs the prebuilt binary, binds your P-cores, installs the unified `sandwich` dispatcher into `~/.local/bin`, and dips:
+
 ```bash
-git clone https://github.com/sandeepmuttvarpu-png/Sandwich-cpp.git
-cd Sandwich-cpp
-
-cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -j$(nproc)
+curl -fsSL https://raw.githubusercontent.com/sandeepmuttvarpu-png/Sandwich-cpp/main/install.sh | bash
 ```
 
-### 2. The "Autopilot Fix My Life" Command (`--sandwich-auto`)
-Throw `--sandwich-auto` at any GGUF. It parses model topology, inspects your VRAM/RAM, decides whether to activate Asymmetric Split-KV or 3-Tier MoE, pins your P-cores, pairs speculative drafters, and executes:
+*(Already cloned the repo? Just run `./install.sh`. If you're a masochist who actually wants to melt your CPU compiling from source, pass `./install.sh --build`.)*
+
+---
+
+### 2. The Unified `sandwich` CLI (Literally 1 command to rule them all)
+
+The installer puts a turbocharged `sandwich` dispatcher straight into your `$PATH`. You don't have to remember 45 cryptic flags at 3 AM anymore:
+
+| Command | What it actually does (No Cap) | The Vibe |
+| :--- | :--- | :--- |
+| **`sandwich run -m model.gguf`** | Fires up local inference with `--sandwich-auto`. Auto-detects MoE vs. Dense, solves VRAM slabs, and blasts tokens at 35+ t/s. | Quick chat / testing |
+| **`sandwich serve -m model.gguf`** | Spawns an OpenAI-compatible REST API & streaming SSE server on `:8080`. | Drop-in for any frontend |
+| **`sandwich agent -m model.gguf`** | **The Coding Agent Supercharger.** Launches on `:8081` with 64k context, `turbo4`, and Technique #45 Radix-Tree prefix cache (0.05s TTFT!). | Cursor, Claude Code, OpenCode |
+| **`sandwich status`** | Displays live GPU VRAM, DDR5 usage, and whether your laptop is currently catching fire. | System Telemetry HUD |
+| **`sandwich bench`** | Executes the full 128k sustained stress test across your hardware. | Benchmark flexing |
+| **`sandwich niah`** | Runs the Needle-In-A-Haystack retrieval benchmark to mathematically prove your KV cache hasn't lost its mind. | Science & Receipts |
+
+*Prefer the raw binaries? `sandwich-cli` and `sandwich-server` are also installed directly into your PATH.*
+
+---
+
+### 3. Connect to Your Favorite Coding Agents (Cursor, OpenWebUI, Continue)
+
+Sandwich speaks native OpenAI `/v1/chat/completions` with streaming Server-Sent Events (SSE). You can plug it into your daily driver tools in under 30 seconds:
+
 ```bash
-./build/bin/llama-cli \
-  -m ~/ai-models/moe/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf \
-  --sandwich-auto \
-  -c 65536
+# Launch the agent server (auto 64k context + Radix-tree prefix cache)
+sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 ```
 
-### 3. High-Concurrency Agentic Server (`llama-server`)
-Launch our optimized server for OpenCode, Claude Code, or Hermes agents. Features instant prefix caching and unified KV slots:
-```bash
-./build/bin/llama-server \
-  -m ~/ai-models/moe/Nemotron-3-Nano-30B-A3B-GGUF/Nemotron-3-Nano-30B-A3B-UD-IQ3_XXS.gguf \
-  --sandwich-auto \
-  --port 8081 -c 65536
-```
+* **Cursor IDE:** Point your OpenAI Base URL to `http://localhost:8081/v1` (Model: `sandwich`).
+* **Continue.dev:** Drop `http://localhost:8081/v1` into your `~/.continue/config.json`.
+* **OpenWebUI & LibreChat:** Set OpenAI API URL to `http://localhost:8081/v1` with API key `sandwich`.
+
+👉 **Need copy-paste config snippets? Peep the complete [Client Integrations Guide (`docs/integrations.md`)](docs/integrations.md)!**
 
 ---
 
@@ -288,7 +307,7 @@ Launch our optimized server for OpenCode, Claude Code, or Hermes agents. Feature
 
 ---
 
-### 7. 🌐 HTTP Server & Agent Integration (`llama-server`)
+### 7. 🌐 HTTP Server & Agent Integration (`sandwich-server` / `llama-server`)
 
 | Flag | Arg | What it actually does | Default |
 | :--- | :---: | :--- | :---: |
