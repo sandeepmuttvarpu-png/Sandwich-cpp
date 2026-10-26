@@ -2188,6 +2188,12 @@ void sandwich_auto_dispatch(common_params & params) {
             LOG_INF("   -> [Technique #38] Fused TurboQuant MMA Tensor Core FlashAttention ACTIVE (--turbo-mma)\n");
         }
 
+        if (params.turboquant_varn || (params.cache_type_k == GGML_TYPE_TURBO4_0 && ctx_eval >= 8192)) {
+            params.turboquant_varn = true;
+            setenv("SANDWICH_TURBOQUANT_VARN", "1", 1);
+            LOG_INF("   -> [Technique #54] TurboQuant Closed-Form Dual-Axis Variance Normalization ACTIVE (--turboquant-varn)\n");
+        }
+
         if (params.sched_async_cpu) {
             LOG_INF("   -> [Technique #39] Asynchronous CPU Split Worker Overlap ACTIVE (--sched-async-cpu)\n");
         }

@@ -25,14 +25,14 @@ And what happens?
 
 We said: **NAH, WE’D WIN.**
 
-We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **52 relentless hardware & algorithmic techniques**:
+We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **54 relentless hardware & algorithmic techniques**:
 1. **Phase 12 3-Tier Hierarchical MoE Engine** (HOT VRAM $\to$ WARM DDR5 THP $\to$ COLD NVMe `io_uring` DMA).
 2. **2Q & Ghost-Cache Replacement Policy** (probation queues that obliterate one-hit wonder cache thrashing).
 3. **The 70% RAM Rule & Asymmetric Split-KV Engine** (eliminates 15ms PCIe ping-pong stalls on giant dense models).
 4. **TurboQuant Polar Lloyd-Max KV Compression** (`turbo4`, `turbo3`, `turbo2` for 128k context with 0% decay).
 5. **EAGLE3 Speculative Multi-Branch Tree Decoding** with adaptive PID controller.
 6. **Radix-Tree Persistent Prefix Caching** (Technique #45: sub-0.05s TTFT on multi-turn agent turns).
-7. **Frontier MoE & Memory Kernels** (Dynamic Entropy Pruning #47, GPUDirect Storage #48, Native MTP #49, Asymmetric KV #50, Chunked Prefill #51, Latent FlashMLA #52).
+7. **Frontier MoE & Memory Kernels** (Dynamic Entropy Pruning #47, GPUDirect Storage #48, Native MTP #49, Asymmetric KV #50, Chunked Prefill #51, Latent FlashMLA #52, Bayesian Shadow Drafter Arbitration #53, Dual-Axis Variance Normalization #54).
 8. **Intel Raptor Lake P-Core Affinity** and a strict **900 MB Wayland Compositor Safety Guard**.
 
 The result? Your 8GB laptop runs **Nemotron 30B MoE at 35.35 tok/s**, generates **GLM-4.7-Flash at 22.3 tok/s flat across 128k context**, and literally boots **GPT-OSS-120B (59 GB on disk) with 100% stability**. Built different. No cap. 🧢🚫
@@ -333,7 +333,7 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 
 ---
 
-### 9. 🔬 Frontier Architecture & Acceleration Flags (Techniques #43 – #52)
+### 9. 🔬 Frontier Architecture & Acceleration Flags (Techniques #43 – #54)
 
 | Flag | Arg | What it actually does | Default |
 | :--- | :---: | :--- | :---: |
@@ -346,6 +346,9 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--asym-kv-squeeze` | None | **[Technique #50] Asymmetric KV Outlier Channelling.** Quantizes sensitive attention keys to `turbo4` and values to `turbo2` for an extreme 2.75 bits/tok squeeze. | `false` |
 | `--chunked-prefill` | None | **[Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging.** Caps transient prefill VRAM spikes to $<350$ MB even at 128k context. | Auto (`ctx >= 32k`) |
 | `--latent-mla`, `--flash-mla` | None | **[Technique #52] Latent FlashMLA Direct Tensor Core MMA.** Fuses uncompressed MLA manifold projections directly into Tensor Core MMA instructions. | Auto (MLA models) |
+| `--spec-select` | None | **[Technique #53] Dynamic Multi-Drafter Arbitration & Bayesian Shadow Learning.** Arbitrates across multiple drafters (`--spec-type`) to maximize expected token yield per step. | Auto (`--sandwich-auto`) |
+| `--turboquant-varn` | None | **[Technique #54] Closed-Form Dual-Axis Variance Normalization.** Normalizes unit variance in closed form in `set-rows.cu`, eliminating long-horizon 10k+ CoT reasoning drift with 0 tail pool overhead. | Auto (`ctx >= 8192`) |
+| `--no-turboquant-varn` | None | Disables TurboQuant closed-form dual-axis variance normalization. | `false` |
 
 </details>
 

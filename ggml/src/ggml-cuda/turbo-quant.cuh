@@ -163,6 +163,7 @@ static __device__ float d_innerq_sq_accum[INNERQ_MAX_CHANNELS];
 static __device__ int   d_innerq_count;
 static __device__ int   d_innerq_active;       // 0 = scales are identity, 1 = scales applied
 static __device__ int   d_innerq_calibrating;  // 1 = accumulating K² stats
+static __device__ int   d_turboquant_varn;     // 1 = variance conservation active
 
 static int  innerq_enabled       = 0;  // host: 0=off, 1=calibrating, 2=active
 static int  innerq_target_tokens = 0;
@@ -173,6 +174,10 @@ static bool  innerq_initialized  = false;
 static void turbo_innerq_init(void) {
     if (innerq_initialized) return;
     innerq_initialized = true;
+
+    const char * env_varn = getenv("SANDWICH_TURBOQUANT_VARN");
+    int varn_active = (env_varn && atoi(env_varn) > 0) ? 1 : 0;
+    CUDA_CHECK(cudaMemcpyToSymbol(d_turboquant_varn, &varn_active, sizeof(int)));
 
     const char * env = getenv("TURBO_INNERQ");
     if (!env || atoi(env) <= 0) {
@@ -269,6 +274,13 @@ static void turbo_innerq_finalize(int group_size) {
 static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
     if (!innerq_initialized) {
         turbo_innerq_init();
+    }
+    static int last_varn_active = -1;
+    const char * env_varn = getenv("SANDWICH_TURBOQUANT_VARN");
+    int varn_active = (env_varn && atoi(env_varn) > 0) ? 1 : 0;
+    if (varn_active != last_varn_active) {
+        last_varn_active = varn_active;
+        CUDA_CHECK(cudaMemcpyToSymbol(d_turboquant_varn, &varn_active, sizeof(int)));
     }
     if (innerq_enabled == 0) return;
 

@@ -355,25 +355,28 @@ static __global__ void k_set_rows_turbo4(
     }
 
     // ---- Step 7: Reconstruction norm (parallel) ----
-    const float c = TURBO_CENTROIDS_4BIT[idx];
-    float rc = c * c;
-    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
-        rc += __shfl_xor_sync(0xffffffff, rc, offset, WARP_SIZE);
-    if (j % WARP_SIZE == 0)
-        warp_accum[j / WARP_SIZE] = rc;
-    __syncthreads();
+    float corrected_norm = grp_norm;
+    if (d_turboquant_varn) {
+        const float c = TURBO_CENTROIDS_4BIT[idx];
+        float rc = c * c;
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+            rc += __shfl_xor_sync(0xffffffff, rc, offset, WARP_SIZE);
+        if (j % WARP_SIZE == 0)
+            warp_accum[j / WARP_SIZE] = rc;
+        __syncthreads();
 
-    __shared__ float s_recon_sq;
-    if (j == 0) {
-        float total = 0.0f;
-        for (int w = 0; w < n_warps; w++) total += warp_accum[w];
-        s_recon_sq = total;
+        __shared__ float s_recon_sq;
+        if (j == 0) {
+            float total = 0.0f;
+            for (int w = 0; w < n_warps; w++) total += warp_accum[w];
+            s_recon_sq = total;
+        }
+        __syncthreads();
+        const float recon_norm     = sqrtf(s_recon_sq);
+        corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
     }
-    __syncthreads();
-    const float recon_norm     = sqrtf(s_recon_sq);
-    const float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
 
-    // ---- Step 8: Write corrected norm and zero rnorm (one thread) ----
+    // ---- Step 8: Write corrected norm (one thread) ----
     if (j == 0) {
         blk->norm  = __float2half(corrected_norm);
     }
