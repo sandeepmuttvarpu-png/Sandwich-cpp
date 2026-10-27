@@ -162,3 +162,12 @@ data: {"choices":[{"delta":{"content":" of"}}]}
 ...
 data: [DONE]
 ```
+
+---
+
+## 5. Ready-to-Run Python SDK Examples
+
+Executable client scripts are available under [`examples/sandwich-client/`](../examples/sandwich-client/):
+- **[`streaming_chat.py`](../examples/sandwich-client/streaming_chat.py):** Real-time streaming chat with automatic TTFT and tokens/sec telemetry.
+- **[`structured_output.py`](../examples/sandwich-client/structured_output.py):** Pydantic structured JSON schema output extraction.
+
