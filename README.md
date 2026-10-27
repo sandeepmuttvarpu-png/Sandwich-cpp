@@ -214,9 +214,9 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 ---
 
 <details>
-<summary><b>🎛️ The Master Spellbook: Complete CLI Flags & Parameters (52 Active Techniques)</b></summary>
+<summary><b>🎛️ The Master Spellbook: Complete CLI Flags & Parameters (54 Active Techniques)</b></summary>
 
-*`--sandwich-auto` tunes all of this dynamically. But if you're a nocturnal systems hacker who loves tweaking parameters manually, here is your definitive field guide (sourced from [`flags.md`](file:///home/sandeep/dev/the-mds/flags.md) and [`dairy.md`](file:///home/sandeep/dev/the-mds/dairy.md)):*
+*`--sandwich-auto` tunes all of this dynamically. But if you're a nocturnal systems hacker who loves tweaking parameters manually, here is your definitive field guide (see the full [Flags Reference (`docs/flags.md`)](docs/flags.md) and [Engineering Diary (`docs/engineering-diary.md`)](docs/engineering-diary.md)):*
 
 ### 1. 🥪 Sandwich Special Flags (Core Engine)
 
