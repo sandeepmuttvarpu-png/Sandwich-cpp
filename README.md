@@ -8,7 +8,8 @@
 [![VRAM: 8GB Friendly](https://img.shields.io/badge/VRAM-8GB%20Friendly%20%F0%9F%92%AA-brightgreen)](#)
 [![Context: 128k Verified](https://img.shields.io/badge/Context-128k%20Verified%20%F0%9F%A7%A0-blueviolet)](#)
 [![Speed: Unhinged](https://img.shields.io/badge/Speed-35%2B%20tok%2Fs%20MoE-red)](#)
-[![Techniques: 52 Active](https://img.shields.io/badge/Techniques-52%20Active%20%E2%9A%A1-orange)](#)
+[![Techniques: 54 Active](https://img.shields.io/badge/Techniques-54%20Active%20%E2%9A%A1-orange)](#)
+[![Whitepaper: v5.0](https://img.shields.io/badge/Whitepaper-v5.0%20(arXiv)-success)](docs/whitepaper.md)
 [![No Cap: Verified](https://img.shields.io/badge/Cap%3A-Zero%20%F0%9F%A7%A2-blue)](#)
 
 ---
