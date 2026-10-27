@@ -141,7 +141,7 @@ Here is exactly how **Sandwich.cpp** changes the game:
 
 ## 📊 The 128k Ultra-Context Endurance Report
 
-*Extract from our comprehensive stress test report ([`sustained_stress_test_of_sandwich_cpp.md`](file:///home/sandeep/dev/the-mds/sustained_stress_test_of_sandwich_cpp.md)) across 6 context tiers (4k, 8k, 16k, 32k, 64k, 128k) and 4 fill regimes (10%, 50%, 75%, 100% context fill) on consumer silicon:*
+*Extract from our comprehensive stress test report ([Endurance Report `docs/sustained-stress-test.md`](docs/sustained-stress-test.md)) across 6 context tiers (4k, 8k, 16k, 32k, 64k, 128k) and 4 fill regimes (10%, 50%, 75%, 100% context fill) on consumer silicon:*
 
 ### 1. Global Empirical Sweet-Spot Matrix
 
