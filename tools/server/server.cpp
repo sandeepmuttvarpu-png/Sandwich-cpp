@@ -261,6 +261,8 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
         routes.post_lora_adapters          = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
+        routes.get_vram                    = models_routes->proxy_get;
+        routes.post_vram                   = models_routes->proxy_post;
 
         // custom routes for router
         routes.get_props                   = models_routes->get_router_props;
@@ -315,6 +317,11 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
+    // [Technique #62] Elastic VRAM dynamic resizing endpoint
+    ctx_http.get ("/vram",                     ex_wrapper(routes.get_vram));
+    ctx_http.get ("/v1/vram",                  ex_wrapper(routes.get_vram));
+    ctx_http.post("/vram",                     ex_wrapper(routes.post_vram));
+    ctx_http.post("/v1/vram",                  ex_wrapper(routes.post_vram));
 
     // resumable streaming: a child binds the local session factories, the router binds
     // proxies that resolve the owning child, see server-stream.h

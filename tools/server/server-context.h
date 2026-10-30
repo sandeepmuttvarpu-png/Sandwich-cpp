@@ -156,6 +156,8 @@ struct server_routes {
     server_http_context::handler_t post_systemone;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
+    server_http_context::handler_t get_vram;
+    server_http_context::handler_t post_vram;
 
     // to be used in router mode
     json get_model_info() const;
@@ -191,6 +193,8 @@ private:
     server_metrics cached_metrics;
     // set when a scrape during sleep already reported the throughput buckets
     bool           should_reset_buckets = false;
+    size_t         elastic_target_budget_mb = 0;
+    size_t         elastic_warm_ram_mb      = 0;
     // call right before sleep to update the cached responses
     void update_cached_responses(bool is_sleeping);
 };

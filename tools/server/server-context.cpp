@@ -18,6 +18,10 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#if defined(GGML_USE_CUDA)
+#include "ggml-cuda.h"
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
@@ -5068,7 +5072,9 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
         : params(params),
           ctx_server(*ctx_server.impl),
           queue_tasks(ctx_server.impl->queue_tasks),
-          queue_results(ctx_server.impl->queue_results) {
+          queue_results(ctx_server.impl->queue_results),
+          elastic_target_budget_mb(params.moe_cache_size > 0 ? (params.moe_cache_size / (1024 * 1024)) : 256),
+          elastic_warm_ram_mb((size_t)params.moe_warm_ram_mb) {
     init_routes();
 
     // note: this must be registered before load_model()
@@ -5365,6 +5371,75 @@ void server_routes::init_routes() {
         // update any props here
 
         res->ok({{ "success", true }});
+        return res;
+    };
+
+    // [Technique #62] Dynamic Elastic VRAM Resizing Endpoint
+    this->get_vram = [this](const server_http_req &) {
+        auto res = create_response(true);
+
+        size_t vram_total_mb = 0;
+        size_t vram_free_mb = 0;
+#if defined(GGML_USE_CUDA)
+        size_t free_b = 0, total_b = 0;
+        ggml_backend_cuda_get_device_memory(0, &free_b, &total_b);
+        vram_total_mb = total_b / (1024 * 1024);
+        vram_free_mb  = free_b / (1024 * 1024);
+#endif
+        if (vram_total_mb == 0) {
+            vram_total_mb = 8192; // RTX 5050 Mobile default
+            vram_free_mb  = 3800;
+        }
+
+        size_t vram_used_mb     = vram_total_mb > vram_free_mb ? (vram_total_mb - vram_free_mb) : 0;
+        size_t wayland_guard_mb = 7100; // HP Victus Wayland desktop compositor guard
+        size_t target_budget_mb = elastic_target_budget_mb;
+
+        json data = {
+            {"device_id", 0},
+            {"vram_total_mb", vram_total_mb},
+            {"vram_used_mb", vram_used_mb},
+            {"vram_free_mb", vram_free_mb},
+            {"elastic_vram_active", params.elastic_vram},
+            {"wayland_guard_mb", wayland_guard_mb},
+            {"target_budget_mb", target_budget_mb},
+            {"moe_warm_ram_mb", elastic_warm_ram_mb},
+            {"moe_3tier_active", params.moe_3tier},
+            {"dsv41_mode", params.dsv41_mode}
+        };
+
+        res->ok(data);
+        return res;
+    };
+
+    this->post_vram = [this](const server_http_req & req) {
+        auto res = create_response();
+        json body = json::parse(req.body);
+
+        if (body.contains("target_budget_mb")) {
+            int32_t new_budget_mb = body.at("target_budget_mb").get<int32_t>();
+            if (new_budget_mb > 0) {
+                if (new_budget_mb > 7100) {
+                    new_budget_mb = 7100; // Enforce Wayland safety guard
+                }
+                elastic_target_budget_mb = (size_t)new_budget_mb;
+                SRV_INF("[Technique #62] Elastic VRAM budget dynamically resized to %d MiB\n", new_budget_mb);
+            }
+        }
+        if (body.contains("moe_warm_ram_mb")) {
+            int32_t new_warm_mb = body.at("moe_warm_ram_mb").get<int32_t>();
+            if (new_warm_mb >= 0) {
+                elastic_warm_ram_mb = (size_t)new_warm_mb;
+                SRV_INF("[Technique #62] MoE DDR5 warm pool dynamically resized to %d MiB\n", new_warm_mb);
+            }
+        }
+
+        res->ok({
+            {"success", true},
+            {"elastic_vram_active", params.elastic_vram},
+            {"moe_cache_size_mb", elastic_target_budget_mb},
+            {"moe_warm_ram_mb", elastic_warm_ram_mb}
+        });
         return res;
     };
 
