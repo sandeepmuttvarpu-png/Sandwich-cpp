@@ -466,6 +466,24 @@ To facilitate artifact evaluation and independent reproduction, Project Sandwich
     --vram-guard 7100M
 ```
 
+### D. DeepSeek V4.1 Flash (GSQ_RCO) with Strata Assimilation (Techniques #55–#63)
+```bash
+./bin/sandwich-cli \
+    --model models/DeepSeek-V4.1-Flash-IQ1_M.gguf \
+    --dsv41 \
+    --dsv41-experts 5 \
+    --dsv41-engram models/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf \
+    --prefill-head-alias \
+    --kva-prefill \
+    --moe-disjoint-guard \
+    --dma-batch \
+    --moe-exchange-rot \
+    --msg-cache \
+    --fused-expdec \
+    --vram-guard 7100M \
+    --ctx-size 65536
+```
+
 # Citations
 
 [1] [Sandwich.cpp MoE Inference Engine](/systems/sandwich-cpp.md)  
