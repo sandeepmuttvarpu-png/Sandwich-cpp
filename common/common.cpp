@@ -1713,6 +1713,42 @@ void sandwich_auto_dispatch(common_params & params) {
     int64_t kv_turbo3_mb = (int64_t)(kv_bytes_turbo3 / (1024ULL * 1024ULL));
     int64_t kv_turbo2_mb = (int64_t)(kv_bytes_turbo2 / (1024ULL * 1024ULL));
 
+    int64_t n_ctx_train = 0;
+    int64_t ctx_id = gguf_find_key(gguf_ctx.get(), (model_arch + ".context_length").c_str());
+    if (ctx_id >= 0) {
+        n_ctx_train = sandwich_get_kv_i64(gguf_ctx.get(), ctx_id);
+    }
+    if (n_ctx_train <= 0) {
+        int64_t orig_ctx_id = gguf_find_key(gguf_ctx.get(), (model_arch + ".rope.scaling.original_context_length").c_str());
+        if (orig_ctx_id >= 0) {
+            n_ctx_train = sandwich_get_kv_i64(gguf_ctx.get(), orig_ctx_id);
+        }
+    }
+    if (n_ctx_train <= 0) {
+        int64_t g_ctx_id = gguf_find_key(gguf_ctx.get(), "general.context_length");
+        if (g_ctx_id >= 0) {
+            n_ctx_train = sandwich_get_kv_i64(gguf_ctx.get(), g_ctx_id);
+        }
+    }
+
+    // Technique #64: Dynamic YaRN Auto-Frequency Scaling
+    if (params.dynamic_yarn && n_ctx_train > 0 && ctx_eval > n_ctx_train) {
+        if (params.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED || params.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_NONE) {
+            const float freq_scale = (float)n_ctx_train / (float)ctx_eval;
+            params.rope_scaling_type = LLAMA_ROPE_SCALING_TYPE_YARN;
+            params.yarn_orig_ctx     = (uint32_t)n_ctx_train;
+            params.rope_freq_scale   = freq_scale;
+            params.yarn_ext_factor   = 1.0f;
+            params.yarn_beta_fast    = 32.0f;
+            params.yarn_beta_slow    = 1.0f;
+        }
+    }
+
+    // Technique #65: Universal Attention Sink Guard (enforce >=4 sink tokens default)
+    if (params.n_sink_tokens < 4) {
+        params.n_sink_tokens = 4;
+    }
+
     LOG_INF("\n=======================================================\n");
     LOG_INF("🥪 [Project Sandwich] Architecture-Aware Auto-Dispatcher\n");
     LOG_INF("   Model Path:    %s\n", params.model.path.c_str());
@@ -2260,6 +2296,14 @@ void sandwich_auto_dispatch(common_params & params) {
     }
     if (params.dsv41_mode || model_arch == "deepseek4") {
         LOG_INF("   -> [DeepSeek V4.1 Flash] GSQ_RCO Native Mode ACTIVE (experts=%d/word, Engram async NVMe reader)\n", params.dsv41_experts);
+    }
+    if (params.dynamic_yarn && params.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN) {
+        LOG_INF("   -> [Technique #64] Dynamic YaRN Auto-Frequency Scaling ACTIVE (n_ctx=%d > train=%ld, scale=%.4f, orig_ctx=%d)\n",
+                ctx_eval, (long)n_ctx_train, params.rope_freq_scale, params.yarn_orig_ctx);
+    }
+    LOG_INF("   -> [Universal Attention Sink Guard] ACTIVE (--attn-sinks %d, prevents multi-turn context collapse)\n", params.n_sink_tokens);
+    if (params.unrotated_kv) {
+        LOG_INF("   -> [Technique #66] Unrotated KV Staging ACTIVE (--unrotated-kv, O(1) zero-copy sliding context shifts)\n");
     }
 
     if (params.speculative.types.size() > 1 || params.speculative.select) {
@@ -2816,6 +2860,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.msg_boundary_cache = params.msg_boundary_cache;
     cparams.dsv41_mode         = params.dsv41_mode;
     cparams.dsv41_experts      = params.dsv41_experts;
+    cparams.dynamic_yarn       = params.dynamic_yarn;
+    cparams.unrotated_kv       = params.unrotated_kv;
 
     return cparams;
 }

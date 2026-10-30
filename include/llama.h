@@ -451,6 +451,8 @@ extern "C" {
         bool moe_disjoint_guard; // Technique #57: Disjoint Peer Cache Guard
         bool moe_exchange_rot;   // Technique #59: Exchange Pointer Rotation
         bool msg_boundary_cache; // Technique #60: Message Boundary Delta Caching
+        bool dynamic_yarn;       // Technique #64: Dynamic YaRN Auto-Frequency Scaling
+        bool unrotated_kv;       // Technique #66: Unrotated KV Staging (O(1) zero-copy sliding context shifts)
         bool dsv41_mode;         // DeepSeek V4.1 Flash native mode
         int32_t dsv41_experts;   // DeepSeek V4.1 routed experts per word
 

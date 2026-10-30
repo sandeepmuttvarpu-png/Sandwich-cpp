@@ -145,6 +145,8 @@ llama_context::llama_context(
     cparams.msg_boundary_cache      = params.msg_boundary_cache;
     cparams.dsv41_mode              = params.dsv41_mode;
     cparams.dsv41_experts           = params.dsv41_experts;
+    cparams.dynamic_yarn            = params.dynamic_yarn;
+    cparams.unrotated_kv            = params.unrotated_kv;
     cparams.moe_mass_thresh         = params.moe_mass_thresh;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -191,6 +193,20 @@ llama_context::llama_context(
 
     if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
         cparams.rope_scaling_type = hparams.rope_scaling_type_train;
+    }
+
+    // Technique #64: Dynamic YaRN Auto-Frequency Scaling (Universal Zero-Tuning 128k Context)
+    if (cparams.dynamic_yarn && (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED || cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_NONE)) {
+        if (cparams.n_ctx > hparams.n_ctx_train && hparams.n_ctx_train > 0) {
+            cparams.rope_scaling_type = LLAMA_ROPE_SCALING_TYPE_YARN;
+            cparams.rope_freq_scale   = (float)hparams.n_ctx_train / (float)cparams.n_ctx;
+            cparams.n_ctx_orig_yarn   = hparams.n_ctx_train;
+            cparams.yarn_ext_factor   = 1.0f;
+            cparams.yarn_beta_fast    = 32.0f;
+            cparams.yarn_beta_slow    = 1.0f;
+            LLAMA_LOG_INFO("%s: [Technique #64] Dynamic YaRN Auto-Frequency Scaling engaged: n_ctx=%d > n_ctx_train=%d, rope_freq_scale=%.4f\n",
+                    __func__, cparams.n_ctx, hparams.n_ctx_train, cparams.rope_freq_scale);
+        }
     }
 
     if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_NONE) {
@@ -314,6 +330,8 @@ llama_context::llama_context(
     cparams.msg_boundary_cache = params.msg_boundary_cache;
     cparams.dsv41_mode         = params.dsv41_mode;
     cparams.dsv41_experts      = params.dsv41_experts;
+    cparams.dynamic_yarn       = params.dynamic_yarn;
+    cparams.unrotated_kv       = params.unrotated_kv;
     cparams.moe_mass_thresh    = params.moe_mass_thresh;
 
     // initialized later
@@ -4333,6 +4351,8 @@ llama_context_params llama_context_default_params() {
         /*.moe_disjoint_guard          =*/ true,
         /*.moe_exchange_rot            =*/ true,
         /*.msg_boundary_cache          =*/ true,
+        /*.dynamic_yarn                =*/ true,
+        /*.unrotated_kv                =*/ true,
         /*.dsv41_mode                  =*/ false,
         /*.dsv41_experts               =*/ 5,
         /*.samplers                    =*/ nullptr,

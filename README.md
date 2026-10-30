@@ -8,7 +8,7 @@
 [![VRAM: 8GB Friendly](https://img.shields.io/badge/VRAM-8GB%20Friendly%20%F0%9F%92%AA-brightgreen)](#)
 [![Context: 128k Verified](https://img.shields.io/badge/Context-128k%20Verified%20%F0%9F%A7%A0-blueviolet)](#)
 [![Speed: Unhinged](https://img.shields.io/badge/Speed-35%2B%20tok%2Fs%20MoE-red)](#)
-[![Techniques: 63 Active](https://img.shields.io/badge/Techniques-63%20Active%20%E2%9A%A1-orange)](#)
+[![Techniques: 66 Active](https://img.shields.io/badge/Techniques-66%20Active%20%E2%9A%A1-orange)](#)
 [![Whitepaper: v7.0](https://img.shields.io/badge/Whitepaper-v7.0%20(arXiv)-success)](docs/whitepaper.md)
 [![No Cap: Verified](https://img.shields.io/badge/Cap%3A-Zero%20%F0%9F%A7%A2-blue)](#)
 
@@ -26,7 +26,7 @@ And what happens?
 
 We said: **NAH, WE’D WIN.**
 
-We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **63 relentless hardware & algorithmic techniques**:
+We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **66 relentless hardware & algorithmic techniques**:
 1. **Phase 12 3-Tier Hierarchical MoE Engine** (HOT VRAM $\to$ WARM DDR5 THP $\to$ COLD NVMe `io_uring` DMA).
 2. **2Q & Ghost-Cache Replacement Policy** (probation queues that obliterate one-hit wonder cache thrashing).
 3. **The 70% RAM Rule & Asymmetric Split-KV Engine** (eliminates 15ms PCIe ping-pong stalls on giant dense models).
@@ -369,6 +369,9 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--dsv41` | None | **[Technique #63] DeepSeek V4.1 Flash Native Engine.** Activates GSQ_RCO sub-2-bit MoE architecture and direct NVMe Engram memory table reader. | `false` |
 | `--dsv41-experts` | `N` | Number of routed experts per word for DeepSeek V4.1 (`5` for faster mode $\le 16$ GB VRAM, `6` for standard). | `5` |
 | `--dsv41-engram` | `PATH` | Path to external 111 GB DeepSeek V4.1 Engram n-gram memory table GGUF file on NVMe SSD. | Auto |
+| `--yarn-auto`, `--dynamic-yarn` | None | **[Technique #64] Dynamic YaRN Auto-Frequency Scaling.** Automatically scales rotary position embeddings via YaRN when requested context exceeds training length ($128\text{k}$ zero-tuning universal scaling). | `true` |
+| `--attn-sinks`, `--sink-tokens` | `N` | **[Technique #65] Universal Attention Sink Guard.** Permanently preserves initial attention sink tokens during context shifting, preventing streaming/multi-turn quality collapse. | `4` |
+| `--unrotated-kv` | None | **[Technique #66] Unrotated KV Staging.** Stores unrotated keys in KV cache with on-the-fly FlashAttention rotation, enabling $O(1)$ zero-copy sliding context shifts on quantized caches. | `true` |
 
 </details>
 

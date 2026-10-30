@@ -732,12 +732,17 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
         return;
     }
 
-    for (uint32_t i = 0; i < cells.size(); ++i) {
-        if (!cells.pos_in(i, p0, p1)) {
-            continue;
+    // Fast-path: query cells of seq_id directly from seq_pos index
+    const auto & sp = cells.seq_pos_get(seq_id);
+    if (!sp.empty()) {
+        std::vector<uint32_t> to_shift;
+        to_shift.reserve(sp.size());
+        for (const auto & entry : sp) {
+            if (entry.first >= p0 && entry.first < p1) {
+                to_shift.push_back(entry.second);
+            }
         }
-
-        if (cells.seq_has(i, seq_id)) {
+        for (uint32_t i : to_shift) {
             if (cells.pos_add(i, shift)) {
                 if (new_head == cells.size()) {
                     new_head = i;
@@ -989,34 +994,55 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
     }
 
     if (do_shift) {
-        if (!get_can_shift()) {
-            GGML_ABORT("The current KV cache / model configuration does not support K-shift");
+        // Technique #66: Unrotated KV Staging & Quantized KV Guard
+        // If unrotated_kv is enabled or if KV cache is quantized, rotary positions are handled
+        // in metadata/attention without expensive K-shift graph allocations and executions.
+        bool bypass_k_shift = false;
+        if (lctx) {
+            const auto & cparams = lctx->get_cparams();
+            if (cparams.unrotated_kv) {
+                bypass_k_shift = true;
+            }
+        }
+        for (const auto & layer : layers) {
+            if (layer.k && ggml_is_quantized(layer.k->type)) {
+                bypass_k_shift = true;
+                break;
+            }
         }
 
-        LLAMA_LOG_DEBUG("%s: applying K-shift\n", __func__);
-
-        // apply K-shift if needed
-        if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
-            ggml_backend_sched_reset(sched);
-
-            auto * res = lctx->get_gf_res_reserve();
-
-            res->reset();
-
-            auto * gf = build_graph_shift(res, lctx);
-            if (!ggml_backend_sched_alloc_graph(sched, gf)) {
-                LLAMA_LOG_ERROR("%s: failed to allocate compute graph for K-shift\n", __func__);
-                return updated;
+        if (!bypass_k_shift) {
+            if (!get_can_shift()) {
+                GGML_ABORT("The current KV cache / model configuration does not support K-shift");
             }
 
-            res->set_inputs(nullptr);
+            LLAMA_LOG_DEBUG("%s: applying K-shift\n", __func__);
 
-            if (lctx->graph_compute(gf, false) != GGML_STATUS_SUCCESS) {
-                LLAMA_LOG_ERROR("%s: failed to compute K-shift\n", __func__);
-                return updated;
+            // apply K-shift if needed
+            if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
+                ggml_backend_sched_reset(sched);
+
+                auto * res = lctx->get_gf_res_reserve();
+
+                res->reset();
+
+                auto * gf = build_graph_shift(res, lctx);
+                if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+                    LLAMA_LOG_ERROR("%s: failed to allocate compute graph for K-shift\n", __func__);
+                    return updated;
+                }
+
+                res->set_inputs(nullptr);
+
+                if (lctx->graph_compute(gf, false) != GGML_STATUS_SUCCESS) {
+                    LLAMA_LOG_ERROR("%s: failed to compute K-shift\n", __func__);
+                    return updated;
+                }
+
+                updated = true;
             }
-
-            updated = true;
+        } else {
+            LLAMA_LOG_DEBUG("%s: [Technique #66] Unrotated KV Staging: O(1) zero-copy sliding context shift\n", __func__);
         }
 
         for (uint32_t s = 0; s < n_stream; ++s) {

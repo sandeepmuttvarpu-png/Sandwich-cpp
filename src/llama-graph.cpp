@@ -2107,6 +2107,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
+    // Technique #56: KVA Late-Layer Recurrence Prefill
+    // Skip expensive MoE FFN GEMMs in late layers during long prompt prefill passes (n_tokens >= 32)
+    const int start_layer = cparams.kva_start_layer >= 0 ? cparams.kva_start_layer : (int)(hparams.n_layer() * 2 / 3);
+    if (cparams.kva_prefill && n_tokens >= 32 && il >= start_layer) {
+        ggml_tensor * moe_out = ggml_scale(ctx0, cur, 0.0f);
+        cb(moe_out, "ffn_moe_out_kva_skip", il);
+        return moe_out;
+    }
+
     // Phase 5: Register layer in Early-Lookahead Router pipeline
     if (ggml_moe_prefetch_enabled()) {
         ggml_moe_prefetch_register_moe_layer(

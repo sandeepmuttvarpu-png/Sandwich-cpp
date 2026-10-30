@@ -63,6 +63,8 @@ struct llama_cparams {
     bool moe_disjoint_guard = true; // [Technique #57] Disjoint Peer Cache Guard
     bool moe_exchange_rot   = true; // [Technique #59] Exchange Pointer Rotation
     bool msg_boundary_cache = true; // [Technique #60] Message Boundary Delta Caching
+    bool dynamic_yarn       = true; // [Technique #64] Dynamic YaRN Auto-Frequency Scaling
+    bool unrotated_kv       = true; // [Technique #66] Unrotated KV Staging (O(1) zero-copy sliding context shifts)
     bool dsv41_mode         = false;// DeepSeek V4.1 Flash native mode
     int32_t dsv41_experts   = 5;    // DeepSeek V4.1 routed experts per word
     bool no_perf;

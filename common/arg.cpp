@@ -4848,6 +4848,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ANTHROPIC_PROTO"));
 
     add_opt(common_arg(
+        {"--yarn-auto", "--dynamic-yarn"},
+        "enable Technique #64 Dynamic YaRN Auto-Frequency Scaling (zero-tuning 128k context)",
+        [](common_params & params) {
+            params.dynamic_yarn = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DYNAMIC_YARN"));
+
+    add_opt(common_arg(
+        {"--no-dynamic-yarn"},
+        "disable Dynamic YaRN Auto-Frequency Scaling",
+        [](common_params & params) {
+            params.dynamic_yarn = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--unrotated-kv"},
+        "enable Technique #66 Unrotated KV Staging (O(1) zero-copy sliding context shifts)",
+        [](common_params & params) {
+            params.unrotated_kv = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_UNROTATED_KV"));
+
+    add_opt(common_arg(
+        {"--no-unrotated-kv"},
+        "disable Unrotated KV Staging",
+        [](common_params & params) {
+            params.unrotated_kv = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
         {"--dsv41"},
         "enable DeepSeek V4.1 Flash native execution mode",
         [](common_params & params) {

@@ -656,7 +656,7 @@ struct common_params {
     bool        chunked_prefill            = false; // [Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging
     bool        latent_mla                 = false; // [Technique #52] Latent FlashMLA Direct Tensor Core MMA (Un-expanded Projection)
 
-    // Phase 15: Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #55 - #63)
+    // Phase 15: Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #55 - #66)
     bool        prefill_head_alias         = true;  // [Technique #55] Prefill Head Aliasing: borrow LM head VRAM for prefill buffers
     bool        kva_prefill                = false; // [Technique #56] KVA: Late-Layer Recurrence Prefill for long cold prompts
     int32_t     kva_start_layer            = -1;    // [Technique #56] KVA starting layer (-1: auto 2/3 depth)
@@ -668,6 +668,8 @@ struct common_params {
     bool        elastic_vram               = true;  // [Technique #62] Elastic VRAM Management API (/v1/vram)
     std::string vram_guard                 = "";    // Maximum VRAM ceiling guardrail (e.g. "7100M", "7.1G")
     bool        anthropic_protocol         = true;  // [Technique #63] Native Anthropic Messages Protocol (/v1/messages)
+    bool        dynamic_yarn               = true;  // [Technique #64] Dynamic YaRN Auto-Frequency Scaling (zero-tuning 128k context)
+    bool        unrotated_kv               = true;  // [Technique #66] Unrotated KV Staging: O(1) zero-copy sliding context shifts
     bool        dsv41_mode                 = false; // DeepSeek V4.1 Flash native execution mode
     int32_t     dsv41_experts              = 5;     // DeepSeek V4.1 routed experts per word (5: faster mode for <=16GB VRAM, 6: full quality)
     std::string dsv41_engram_path          = "";    // Path to DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf
