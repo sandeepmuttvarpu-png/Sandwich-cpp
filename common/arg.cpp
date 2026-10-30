@@ -1696,7 +1696,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--sink-tokens", "--attn-sinks"}, "N",
+        {"--attn-sinks", "--sink-tokens"}, "N",
         string_format("number of initial attention sink tokens to permanently preserve during context shift (default: %d)", params.n_sink_tokens),
         [](common_params & params, int value) {
             params.n_sink_tokens = value;
@@ -4386,7 +4386,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--split-kv", "--kv-vram"},
+        {"--kv-vram", "--split-kv"},
         "allocate KV cache in GPU VRAM even when model weights run on CPU (n_gpu_layers == 0)",
         [](common_params & params) {
             params.split_kv = true;
@@ -4394,7 +4394,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPLIT_KV"));
     add_opt(common_arg(
-        {"--no-split-kv", "--no-kv-vram"},
+        {"--no-kv-vram", "--no-split-kv"},
         "disable pure VRAM KV cache on CPU target models",
         [](common_params & params) {
             params.split_kv = false;
@@ -4415,7 +4415,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--preset-agent", "--preset"}, "PRESET",
+        {"--preset", "--preset-agent"}, "PRESET",
         "apply specialized workload presets ('agent' = auto sandwich, predict solver, 4GB prefix cache, 4 slots, tool stop tokens, port 8081)",
         [](common_params & params, const std::string & value) {
             if (value == "agent") {
@@ -4446,14 +4446,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_FP4"));
     add_opt(common_arg(
-        {"--flash-attn-native-quants", "-fanq"},
+        {"-fanq", "--flash-attn-native-quants"},
         "read quantized K/V cache directly in shared memory without intermediate F16 copy (zero workspace, saves 1.25GB VRAM)",
         [](common_params & params) {
             params.flash_attn_native_quants = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_FLASH_ATTN_NATIVE_QUANTS"));
     add_opt(common_arg(
-        {"--no-flash-attn-native-quants", "-nofanq"},
+        {"-nofanq", "--no-flash-attn-native-quants"},
         "disable direct shared-memory quantized FlashAttention",
         [](common_params & params) {
             params.flash_attn_native_quants = false;
@@ -4498,20 +4498,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             setenv("SANDWICH_TURBOQUANT_VARN", "0", 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
-    add_opt(common_arg(
-        {"--sched-async-cpu"},
-        "overlap CPU worker thread splits with GPU CUDA stream execution",
-        [](common_params & params) {
-            params.sched_async_cpu = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SCHED_ASYNC_CPU"));
-    add_opt(common_arg(
-        {"--no-sched-async-cpu"},
-        "disable asynchronous CPU worker splits",
-        [](common_params & params) {
-            params.sched_async_cpu = false;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
 
     // Phase 13 & 14 Frontier Techniques (Techniques #43 - #52)
     add_opt(common_arg(
@@ -4624,7 +4611,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--latent-mla", "--flash-mla"},
+        {"--flash-mla", "--latent-mla"},
         "enable Phase 14 Latent FlashMLA Direct Tensor Core MMA (fuses MLA uncompressed projection directly into MMA inner loop)",
         [](common_params & params) {
             params.latent_mla = true;
@@ -4632,7 +4619,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_LATENT_MLA"));
     add_opt(common_arg(
-        {"--no-latent-mla", "--no-flash-mla"},
+        {"--no-flash-mla", "--no-latent-mla"},
         "disable direct Latent FlashMLA Tensor Core MMA",
         [](common_params & params) {
             params.latent_mla = false;
@@ -4795,6 +4782,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.dsv41_engram_path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DSV41_ENGRAM"));
+
+    add_opt(common_arg(
+        {"--dsv41-stream"},
+        "enable DeepSeek V4.1 direct SSD streaming for external memory",
+        [](common_params & /*params*/) {
+            setenv("STRATA_DSV41_STREAM", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DSV41_STREAM"));
+
+    add_opt(common_arg(
+        {"--vram-guard"}, "LIMIT",
+        "maximum VRAM ceiling guardrail (e.g. 7100M, 7G)",
+        [](common_params & params, const std::string & value) {
+            params.vram_guard = value;
+            setenv("SANDWICH_VRAM_GUARD", value.c_str(), 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_VRAM_GUARD"));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

@@ -666,6 +666,7 @@ struct common_params {
     bool        msg_boundary_cache         = true;  // [Technique #60] Message-Boundary Delta Caching in Radix Tree
     bool        fused_expdec               = true;  // [Technique #61] QSA_ROWS & EXPDEC Fused Shared-Memory Kernels
     bool        elastic_vram               = true;  // [Technique #62] Elastic VRAM Management API (/v1/vram)
+    std::string vram_guard                 = "";    // Maximum VRAM ceiling guardrail (e.g. "7100M", "7.1G")
     bool        anthropic_protocol         = true;  // [Technique #63] Native Anthropic Messages Protocol (/v1/messages)
     bool        dsv41_mode                 = false; // DeepSeek V4.1 Flash native execution mode
     int32_t     dsv41_experts              = 5;     // DeepSeek V4.1 routed experts per word (5: faster mode for <=16GB VRAM, 6: full quality)

@@ -527,7 +527,16 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
-        if ((cparams.moe_cache_size > 0 || cparams.moe_3tier) && model.hparams.n_expert > 0) {
+        bool has_gpu_backend = false;
+        for (const auto & b : backend_ptrs) {
+            auto dt = ggml_backend_dev_type(ggml_backend_get_device(b));
+            if (dt == GGML_BACKEND_DEVICE_TYPE_GPU || dt == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                has_gpu_backend = true;
+                break;
+            }
+        }
+
+        if (has_gpu_backend && (cparams.moe_cache_size > 0 || cparams.moe_3tier) && model.hparams.n_expert > 0) {
             size_t vram_cache_sz = cparams.moe_cache_size > 0 ? cparams.moe_cache_size : 256ULL * 1024 * 1024;
             moe_cache = std::make_unique<llama_moe_cache>(
                 model, backend_ptrs, backend_buft, vram_cache_sz,
