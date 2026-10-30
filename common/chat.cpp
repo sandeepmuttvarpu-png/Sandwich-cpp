@@ -1600,7 +1600,12 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         }
         LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), ctx.input.substr(result.end).c_str());
         LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), ctx.input.c_str());
-        throw std::runtime_error(std::string("The model produced output that does not match the expected ") + common_chat_format_name(params.format) + " format");
+        // Project Sandwich resilient fallback: if model outputs unformatted or raw markdown instead of strict PEG tags,
+        // gracefully fall back to raw text content rather than aborting generation.
+        common_chat_msg fallback_msg;
+        fallback_msg.role = "assistant";
+        fallback_msg.content = input.text.empty() ? ctx.input : input.text;
+        return fallback_msg;
     }
 
     common_chat_msg msg;
