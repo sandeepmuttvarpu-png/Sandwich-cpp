@@ -18,6 +18,7 @@ struct sandwich_radix_node {
     int32_t seq_id = -1;
     int32_t kv_cell_start = 0;
     int32_t kv_cell_count = 0;
+    bool is_message_boundary = false; // [Technique #60] message turn boundary marker
     std::chrono::steady_clock::time_point last_accessed;
     std::unordered_map<llama_token, std::shared_ptr<sandwich_radix_node>> children;
 
@@ -86,6 +87,52 @@ public:
             curr = child;
         }
 
+        return res;
+    }
+
+    // [Technique #60] Strata Message-Boundary Delta Caching
+    // Register token ids corresponding to message boundaries (e.g. ChatML <|im_start|>, <|im_end|>, DeepSeek markers)
+    void register_boundary_token(llama_token tok, bool is_start = false) {
+        boundary_tokens[tok] = is_start;
+    }
+
+    bool is_boundary_token(llama_token tok) const {
+        return boundary_tokens.find(tok) != boundary_tokens.end();
+    }
+
+    // Snaps matched token count backwards to the latest confirmed complete message boundary
+    size_t snap_to_message_boundary(const std::vector<llama_token> & prompt, size_t matched_len) const {
+        if (matched_len == 0 || boundary_tokens.empty() || matched_len >= prompt.size()) {
+            return matched_len;
+        }
+
+        // Search backwards from matched_len - 1 to find the latest boundary delimiter
+        for (ssize_t i = (ssize_t)matched_len - 1; i >= 0; --i) {
+            auto it = boundary_tokens.find(prompt[i]);
+            if (it != boundary_tokens.end()) {
+                bool is_start = it->second;
+                if (is_start) {
+                    // Start tag of an incomplete turn: snap to immediately before the start tag
+                    return (size_t)i;
+                } else {
+                    // End tag of a completed turn: snap cleanly including the end tag
+                    return (size_t)(i + 1);
+                }
+            }
+        }
+        return matched_len;
+    }
+
+    // Query longest common prefix snapped to message turn boundary (Technique #60)
+    match_result find_prefix_boundary_snapped(const std::vector<llama_token> & prompt, bool snap = true) {
+        match_result res = find_longest_prefix(prompt);
+        if (snap && res.matched_tokens > 0 && res.matched_tokens < prompt.size() && !boundary_tokens.empty()) {
+            size_t snapped = snap_to_message_boundary(prompt, res.matched_tokens);
+            if (snapped > 0 && snapped <= res.matched_tokens) {
+                res.matched_tokens = snapped;
+                res.kv_end = res.kv_start + (int32_t)snapped;
+            }
+        }
         return res;
     }
 
@@ -183,4 +230,5 @@ private:
     std::shared_ptr<sandwich_radix_node> root;
     size_t max_tokens;
     size_t total_cached_tokens;
+    std::unordered_map<llama_token, bool> boundary_tokens;
 };

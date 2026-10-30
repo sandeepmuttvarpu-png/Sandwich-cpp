@@ -441,8 +441,13 @@ struct llama_moe_cache::impl {
     // views used by copy_experts
     ggml_context_ptr ctx_views;
 
-    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier, bool moe_2q) :
-            model(&model), n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
+    bool dma_batch      = true;
+    bool disjoint_guard = true;
+    bool exchange_rot   = true;
+
+    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier, bool moe_2q, bool dma_batch = true, bool disjoint_guard = true, bool exchange_rot = true) :
+            model(&model), n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()),
+            dma_batch(dma_batch), disjoint_guard(disjoint_guard), exchange_rot(exchange_rot) {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -934,15 +939,37 @@ struct llama_moe_cache::impl {
                 const size_t expert_size = w->nb[2];
                 const size_t tensor_off  = tier_engine.group_tensor_offsets[l.ig][ip];
 
-                for (const auto & f : fills) {
-                    const void * host_expert_ptr = (const uint8_t *)w->data + f.expert * expert_size;
-                    const void * warm_src = (tier_engine.locators[il][f.expert].ram_ptr != nullptr) ?
-                        (const uint8_t *)tier_engine.locators[il][f.expert].ram_ptr + tensor_off :
-                        host_expert_ptr;
-                    const void * dma_src  = devices[g.id].pinned_ring.stage(warm_src, expert_size);
+                if (dma_batch) {
+                    // [Technique #58] Strata Batched DMA Transfers: Coalesce consecutive slots into contiguous transfers
+                    for (size_t i = 0; i < fills.size(); ) {
+                        size_t n = 1;
+                        while (i + n < fills.size() && fills[i + n].slot == fills[i].slot + (int32_t)n) {
+                            n++;
+                        }
+                        for (size_t k = 0; k < n; ++k) {
+                            const auto & f = fills[i + k];
+                            const void * host_expert_ptr = (const uint8_t *)w->data + f.expert * expert_size;
+                            const void * warm_src = (tier_engine.locators[il][f.expert].ram_ptr != nullptr) ?
+                                (const uint8_t *)tier_engine.locators[il][f.expert].ram_ptr + tensor_off :
+                                host_expert_ptr;
+                            const void * dma_src  = devices[g.id].pinned_ring.stage(warm_src, expert_size);
 
-                    ggml_backend_tensor_set_async(backend, bank, dma_src, f.slot * expert_size, expert_size);
-                    bytes += expert_size;
+                            ggml_backend_tensor_set_async(backend, bank, dma_src, f.slot * expert_size, expert_size);
+                            bytes += expert_size;
+                        }
+                        i += n;
+                    }
+                } else {
+                    for (const auto & f : fills) {
+                        const void * host_expert_ptr = (const uint8_t *)w->data + f.expert * expert_size;
+                        const void * warm_src = (tier_engine.locators[il][f.expert].ram_ptr != nullptr) ?
+                            (const uint8_t *)tier_engine.locators[il][f.expert].ram_ptr + tensor_off :
+                            host_expert_ptr;
+                        const void * dma_src  = devices[g.id].pinned_ring.stage(warm_src, expert_size);
+
+                        ggml_backend_tensor_set_async(backend, bank, dma_src, f.slot * expert_size, expert_size);
+                        bytes += expert_size;
+                    }
                 }
             }
             for (const auto & f : fills) {
@@ -1060,8 +1087,11 @@ llama_moe_cache::llama_moe_cache(const llama_model & model,
                                  size_t size,
                                  size_t warm_ram_bytes,
                                  bool   moe_3tier,
-                                 bool   moe_2q) :
-    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier, moe_2q)) {
+                                 bool   moe_2q,
+                                 bool   dma_batch,
+                                 bool   disjoint_guard,
+                                 bool   exchange_rot) :
+    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier, moe_2q, dma_batch, disjoint_guard, exchange_rot)) {
 }
 
 llama_moe_cache::~llama_moe_cache() = default;

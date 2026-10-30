@@ -2811,6 +2811,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.kva_prefill        = params.kva_prefill;
     cparams.kva_start_layer    = params.kva_start_layer;
     cparams.dma_batch          = params.dma_batch;
+    cparams.moe_disjoint_guard = params.moe_disjoint_guard;
+    cparams.moe_exchange_rot   = params.moe_exchange_rot;
     cparams.msg_boundary_cache = params.msg_boundary_cache;
     cparams.dsv41_mode         = params.dsv41_mode;
     cparams.dsv41_experts      = params.dsv41_experts;

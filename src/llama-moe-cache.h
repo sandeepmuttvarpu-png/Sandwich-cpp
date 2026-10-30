@@ -35,7 +35,10 @@ public:
                     size_t size,
                     size_t warm_ram_bytes = 0,
                     bool   moe_3tier = false,
-                    bool   moe_2q = true);
+                    bool   moe_2q = true,
+                    bool   dma_batch = true,
+                    bool   disjoint_guard = true,
+                    bool   exchange_rot = true);
     ~llama_moe_cache();
 
     // the device that caches layer il

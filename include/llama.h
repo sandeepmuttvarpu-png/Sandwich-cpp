@@ -448,6 +448,8 @@ extern "C" {
         bool kva_prefill;        // Technique #56: KVA Late-Layer Recurrence Prefill
         int32_t kva_start_layer; // Technique #56: KVA starting layer
         bool dma_batch;          // Technique #58: Batched DMA Engine
+        bool moe_disjoint_guard; // Technique #57: Disjoint Peer Cache Guard
+        bool moe_exchange_rot;   // Technique #59: Exchange Pointer Rotation
         bool msg_boundary_cache; // Technique #60: Message Boundary Delta Caching
         bool dsv41_mode;         // DeepSeek V4.1 Flash native mode
         int32_t dsv41_experts;   // DeepSeek V4.1 routed experts per word

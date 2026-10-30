@@ -140,6 +140,8 @@ llama_context::llama_context(
     cparams.kva_prefill             = params.kva_prefill;
     cparams.kva_start_layer         = params.kva_start_layer;
     cparams.dma_batch               = params.dma_batch;
+    cparams.moe_disjoint_guard      = params.moe_disjoint_guard;
+    cparams.moe_exchange_rot        = params.moe_exchange_rot;
     cparams.msg_boundary_cache      = params.msg_boundary_cache;
     cparams.dsv41_mode              = params.dsv41_mode;
     cparams.dsv41_experts           = params.dsv41_experts;
@@ -307,6 +309,8 @@ llama_context::llama_context(
     cparams.kva_prefill        = params.kva_prefill;
     cparams.kva_start_layer    = params.kva_start_layer;
     cparams.dma_batch          = params.dma_batch;
+    cparams.moe_disjoint_guard = params.moe_disjoint_guard;
+    cparams.moe_exchange_rot   = params.moe_exchange_rot;
     cparams.msg_boundary_cache = params.msg_boundary_cache;
     cparams.dsv41_mode         = params.dsv41_mode;
     cparams.dsv41_experts      = params.dsv41_experts;
@@ -525,7 +529,10 @@ llama_context::llama_context(
 
         if ((cparams.moe_cache_size > 0 || cparams.moe_3tier) && model.hparams.n_expert > 0) {
             size_t vram_cache_sz = cparams.moe_cache_size > 0 ? cparams.moe_cache_size : 256ULL * 1024 * 1024;
-            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, vram_cache_sz, cparams.moe_warm_ram_bytes, cparams.moe_3tier, cparams.moe_2q);
+            moe_cache = std::make_unique<llama_moe_cache>(
+                model, backend_ptrs, backend_buft, vram_cache_sz,
+                cparams.moe_warm_ram_bytes, cparams.moe_3tier, cparams.moe_2q,
+                cparams.dma_batch, cparams.moe_disjoint_guard, cparams.moe_exchange_rot);
         }
 
         sched_reserve();
@@ -4314,6 +4321,8 @@ llama_context_params llama_context_default_params() {
         /*.kva_prefill                 =*/ false,
         /*.kva_start_layer             =*/ -1,
         /*.dma_batch                   =*/ true,
+        /*.moe_disjoint_guard          =*/ true,
+        /*.moe_exchange_rot            =*/ true,
         /*.msg_boundary_cache          =*/ true,
         /*.dsv41_mode                  =*/ false,
         /*.dsv41_experts               =*/ 5,
