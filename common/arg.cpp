@@ -74,6 +74,24 @@ static std::string read_file(const std::string & fname) {
     return content;
 }
 
+static uint64_t parse_byte_size_string(const std::string & s) {
+    if (s.empty()) return 0;
+    char unit = s.back();
+    uint64_t mult = 1;
+    std::string num_str = s;
+    if (unit == 'g' || unit == 'G') {
+        mult = 1024ULL * 1024 * 1024;
+        num_str = s.substr(0, s.size() - 1);
+    } else if (unit == 'm' || unit == 'M') {
+        mult = 1024ULL * 1024;
+        num_str = s.substr(0, s.size() - 1);
+    } else if (unit == 'k' || unit == 'K') {
+        mult = 1024ULL;
+        num_str = s.substr(0, s.size() - 1);
+    }
+    return std::stoull(num_str) * mult;
+}
+
 static const std::vector<common_arg> & get_common_arg_defs() {
     static const std::vector<common_arg> options = [] {
         common_params params;
@@ -856,8 +874,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 }
 
                 // arg with single value
-                check_arg(i);
-                std::string val = argv[++i];
+                std::string val;
+                bool is_optional_val = opt.value_hint != nullptr && opt.value_hint[0] == '[';
+                if (is_optional_val && (i + 1 >= argc || (argv[i + 1][0] == '-' && argv[i + 1][1] != '\0'))) {
+                    val = "on";
+                } else {
+                    check_arg(i);
+                    val = argv[++i];
+                }
                 if (opt.handler_int) {
                     opt.handler_int(params, std::stoi(val));
                     continue;
@@ -1241,8 +1265,13 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
         if (opt.value_hint != nullptr) {
             // arg with single value
-            check_arg(i);
-            val = argv[++i];
+            bool is_optional_val = opt.value_hint[0] == '[';
+            if (is_optional_val && (i + 1 >= argc || (argv[i + 1][0] == '-' && argv[i + 1][1] != '\0'))) {
+                val = "on";
+            } else {
+                check_arg(i);
+                val = argv[++i];
+            }
         }
         if (opt.value_hint_2 != nullptr) {
             // TODO: support arg with 2 values
@@ -1570,6 +1599,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--pin-cores"},
+        "pin computation worker threads to P-cores for deterministic latency",
+        [](common_params & params) {
+            params.cpuparams.mask_valid = true;
+            params.cpuparams.strict_cpu = 1;
+            int n_cores = params.cpuparams.n_threads > 0 ? params.cpuparams.n_threads : 6;
+            std::string range = "0-" + std::to_string(n_cores - 1);
+            parse_cpu_range(range, params.cpuparams.cpumask);
+            params.cpuparams_batch.mask_valid = true;
+            params.cpuparams_batch.strict_cpu = 1;
+            parse_cpu_range(range, params.cpuparams_batch.cpumask);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PIN_CORES"));
+    add_opt(common_arg(
         {"--prio"}, "N",
         string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {
@@ -1814,7 +1857,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SHOW_TIMINGS"));
     add_opt(common_arg(
-        {"-f", "--file"}, "FNAME",
+        {"-f", "--file", "--prompt-file"}, "FNAME",
         "a file containing the prompt (default: none)",
         [](common_params & params, const std::string & value) {
             params.prompt = read_file(value);
@@ -2476,6 +2519,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--kv-type"}, "TYPE",
+        "KV cache data type for both K and V (e.g. turbo4, turbo3, turbo2, f16, q8_0, q4_0)",
+        [](common_params & params, const std::string & value) {
+            params.cache_type_k = kv_cache_type_from_str(value);
+            params.cache_type_v = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_KV_TYPE"));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {
@@ -2817,7 +2868,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_SLOTS"));
     add_opt(common_arg(
-        {"--moe-3tier"},
+        {"--vram-slab"}, "SIZE",
+        "Phase 12 Tier 1 HOT VRAM expert cache slab size (e.g. 3800M, 4G)",
+        [](common_params & params, const std::string & value) {
+            uint64_t bytes = parse_byte_size_string(value);
+            params.moe_cache_size = (size_t)bytes;
+        }
+    ).set_env("LLAMA_ARG_VRAM_SLAB"));
+    add_opt(common_arg(
+        {"--io-uring", "--moe-3tier"},
         "enable Phase 12 3-tier hierarchical MoE memory engine (HOT VRAM -> WARM DDR5 THP -> COLD NVMe io_uring DMA) (default: enabled)",
         [](common_params & params) {
             params.moe_3tier = true;
@@ -2831,7 +2890,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--moe-2q"},
+        {"--moe-tiers"}, "CONFIG",
+        "Phase 12 3-tier memory allocation hierarchy (e.g. hot:vram,warm:ram,cold:nvme)",
+        [](common_params & params, const std::string & value) {
+            setenv("SANDWICH_MOE_TIERS", value.c_str(), 1);
+            params.moe_3tier = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_TIERS"));
+    add_opt(common_arg(
+        {"--io-batch-size"}, "N",
+        "io_uring batch size for asynchronous Tier 3 NVMe expert loading (default: 8)",
+        [](common_params & /*params*/, int value) {
+            setenv("SANDWICH_IO_BATCH_SIZE", std::to_string(value).c_str(), 1);
+        }
+    ).set_env("LLAMA_ARG_IO_BATCH_SIZE"));
+    add_opt(common_arg(
+        {"--moe-2q", "--moe-2q-cache"},
         "enable Phase 12 2Q & Ghost-Cache replacement policy (A1in probation + Am frequent + A1out ghost) (default: enabled)",
         [](common_params & params) {
             params.moe_2q = true;
@@ -2845,6 +2919,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--moe-probation"}, "FLOAT",
+        "Phase 12 2Q probation queue size fraction (default: 0.25)",
+        [](common_params & /*params*/, const std::string & value) {
+            setenv("SANDWICH_MOE_PROBATION", value.c_str(), 1);
+        }
+    ).set_env("LLAMA_ARG_MOE_PROBATION"));
+    add_opt(common_arg(
         {"--moe-warm-ram-mb"}, "N",
         "Phase 12 Tier 2 WARM DDR5 RAM pool budget in MiB (default: 12288)",
         [](common_params & params, int value) {
@@ -2854,6 +2935,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_warm_ram_mb = value;
         }
     ).set_env("LLAMA_ARG_MOE_WARM_RAM_MB"));
+    add_opt(common_arg(
+        {"--thp-pool"}, "SIZE",
+        "Transparent HugePages RAM pool size for Phase 12 Tier 2 WARM DDR5 (e.g. 10G, 12288M)",
+        [](common_params & params, const std::string & value) {
+            uint64_t bytes = parse_byte_size_string(value);
+            params.moe_warm_ram_mb = (int32_t)(bytes / (1024 * 1024));
+        }
+    ).set_env("LLAMA_ARG_THP_POOL"));
     add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
@@ -4542,7 +4631,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_RADIX_CACHE_TOKENS"));
     add_opt(common_arg(
-        {"--moe-mass-thresh"}, "F",
+        {"--entropy-pruning", "--moe-mass-thresh"}, "F",
         "Phase 14 Dynamic MoE Softmax Entropy Pruning cumulative mass threshold tau in (0.0, 1.0] (default: 0.96)",
         [](common_params & params, const std::string & value) {
             float val = std::stof(value);
@@ -4899,7 +4988,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));
     add_opt(common_arg(
-        {"--spec-draft-model", "-md", "--model-draft"}, "FNAME",
+        {"-md", "--draft-model", "--model-draft", "--spec-draft-model"}, "FNAME",
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.mparams.path = value;
@@ -5057,9 +5146,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
     add_opt(common_arg(
         {"--draft", "--draft-n", "--draft-max"}, "N",
-        "the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max",
-        [](common_params & /*params*/, int /*value*/) {
-            arg_removed("use --spec-draft-n-max or --spec-ngram-mod-n-max");
+        "number of tokens to draft for speculative decoding (alias for --spec-draft-n-max)",
+        [](common_params & params, int value) {
+            params.speculative.draft.n_max = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MAX"));
     add_opt(common_arg(
