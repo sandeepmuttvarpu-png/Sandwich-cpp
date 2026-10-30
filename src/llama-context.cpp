@@ -136,6 +136,13 @@ llama_context::llama_context(
     cparams.moe_2q                  = params.moe_2q;
     cparams.moe_gds                 = params.moe_gds;
     cparams.latent_mla              = params.latent_mla;
+    cparams.prefill_head_alias      = params.prefill_head_alias;
+    cparams.kva_prefill             = params.kva_prefill;
+    cparams.kva_start_layer         = params.kva_start_layer;
+    cparams.dma_batch               = params.dma_batch;
+    cparams.msg_boundary_cache      = params.msg_boundary_cache;
+    cparams.dsv41_mode              = params.dsv41_mode;
+    cparams.dsv41_experts           = params.dsv41_experts;
     cparams.moe_mass_thresh         = params.moe_mass_thresh;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -296,6 +303,13 @@ llama_context::llama_context(
     cparams.moe_2q             = params.moe_2q;
     cparams.moe_gds            = params.moe_gds;
     cparams.latent_mla         = params.latent_mla;
+    cparams.prefill_head_alias = params.prefill_head_alias;
+    cparams.kva_prefill        = params.kva_prefill;
+    cparams.kva_start_layer    = params.kva_start_layer;
+    cparams.dma_batch          = params.dma_batch;
+    cparams.msg_boundary_cache = params.msg_boundary_cache;
+    cparams.dsv41_mode         = params.dsv41_mode;
+    cparams.dsv41_experts      = params.dsv41_experts;
     cparams.moe_mass_thresh    = params.moe_mass_thresh;
 
     // initialized later
@@ -4296,6 +4310,13 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.moe_gds                     =*/ false,
         /*.latent_mla                  =*/ false,
+        /*.prefill_head_alias          =*/ true,
+        /*.kva_prefill                 =*/ false,
+        /*.kva_start_layer             =*/ -1,
+        /*.dma_batch                   =*/ true,
+        /*.msg_boundary_cache          =*/ true,
+        /*.dsv41_mode                  =*/ false,
+        /*.dsv41_experts               =*/ 5,
         /*.samplers                    =*/ nullptr,
         /*.n_samplers                  =*/ 0,
         /*.ctx_other                   =*/ nullptr,

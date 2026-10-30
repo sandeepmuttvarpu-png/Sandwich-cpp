@@ -56,6 +56,13 @@ struct llama_cparams {
     bool moe_2q;
     bool moe_gds;
     bool latent_mla;
+    bool prefill_head_alias = true; // [Technique #55] Borrow output head VRAM for prefill buffers
+    bool kva_prefill        = false;// [Technique #56] KVA Late-Layer Recurrence Prefill
+    int32_t kva_start_layer = -1;   // [Technique #56] KVA starting layer
+    bool dma_batch          = true; // [Technique #58] Batched DMA Engine
+    bool msg_boundary_cache = true; // [Technique #60] Message Boundary Delta Caching
+    bool dsv41_mode         = false;// DeepSeek V4.1 Flash native mode
+    int32_t dsv41_experts   = 5;    // DeepSeek V4.1 routed experts per word
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;

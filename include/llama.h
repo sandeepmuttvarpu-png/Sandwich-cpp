@@ -444,6 +444,13 @@ extern "C" {
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
         bool moe_gds;     // Technique #48: GPUDirect Storage (libcufile) NVMe-to-VRAM direct bypass
         bool latent_mla;  // Technique #52: Latent FlashMLA direct Tensor Core MMA uncompressed projection
+        bool prefill_head_alias; // Technique #55: Prefill Head Aliasing
+        bool kva_prefill;        // Technique #56: KVA Late-Layer Recurrence Prefill
+        int32_t kva_start_layer; // Technique #56: KVA starting layer
+        bool dma_batch;          // Technique #58: Batched DMA Engine
+        bool msg_boundary_cache; // Technique #60: Message Boundary Delta Caching
+        bool dsv41_mode;         // DeepSeek V4.1 Flash native mode
+        int32_t dsv41_experts;   // DeepSeek V4.1 routed experts per word
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)

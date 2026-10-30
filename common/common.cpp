@@ -2235,6 +2235,33 @@ void sandwich_auto_dispatch(common_params & params) {
         LOG_INF("   -> [Technique #52] Latent FlashMLA Direct Tensor Core MMA ACTIVE (--latent-mla, un-expanded manifold projection)\n");
     }
 
+    // Phase 15: Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #55 - #63)
+    if (params.prefill_head_alias) {
+        LOG_INF("   -> [Technique #55] Prefill Head Aliasing ACTIVE (--prefill-head-alias, borrow output head VRAM during prefill)\n");
+    }
+    if (params.kva_prefill || (ctx_eval >= 32768 && (is_moe || is_mla))) {
+        params.kva_prefill = true;
+        LOG_INF("   -> [Technique #56] KVA Late-Layer Recurrence Prefill ACTIVE (--kva-prefill, skip late MoE forward passes)\n");
+    }
+    if (params.moe_disjoint_guard) {
+        LOG_INF("   -> [Technique #57] Disjoint Peer Cache Guard ACTIVE (--moe-disjoint-guard, prevent duplicate expert slots)\n");
+    }
+    if (params.dma_batch) {
+        LOG_INF("   -> [Technique #58] Batched DMA Engine ACTIVE (--dma-batch, cudaMemcpyBatchAsync on CUDA 13+)\n");
+    }
+    if (params.moe_exchange_rot) {
+        LOG_INF("   -> [Technique #59] Exchange Buffer Pointer Rotation ACTIVE (--moe-exchange-rot, zero-copy host DRAM swap)\n");
+    }
+    if (params.msg_boundary_cache) {
+        LOG_INF("   -> [Technique #60] Message-Boundary Delta Caching ACTIVE (--msg-cache, instant agent multi-turn edit)\n");
+    }
+    if (params.fused_expdec) {
+        LOG_INF("   -> [Technique #61] QSA_ROWS & EXPDEC Fused Shared-Memory Kernels ACTIVE (--fused-expdec)\n");
+    }
+    if (params.dsv41_mode || model_arch == "deepseek4") {
+        LOG_INF("   -> [DeepSeek V4.1 Flash] GSQ_RCO Native Mode ACTIVE (experts=%d/word, Engram async NVMe reader)\n", params.dsv41_experts);
+    }
+
     if (params.speculative.types.size() > 1 || params.speculative.select) {
         params.speculative.select = true;
         LOG_INF("   -> [Dynamic Multi-Drafter] Dynamic Speculative Drafter Arbitration ACTIVE (--spec-select, Bayesian shadow learning)\n");
@@ -2780,6 +2807,13 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.moe_mass_thresh    = params.moe_mass_thresh;
     cparams.moe_gds            = params.moe_gds;
     cparams.latent_mla         = params.latent_mla;
+    cparams.prefill_head_alias = params.prefill_head_alias;
+    cparams.kva_prefill        = params.kva_prefill;
+    cparams.kva_start_layer    = params.kva_start_layer;
+    cparams.dma_batch          = params.dma_batch;
+    cparams.msg_boundary_cache = params.msg_boundary_cache;
+    cparams.dsv41_mode         = params.dsv41_mode;
+    cparams.dsv41_experts      = params.dsv41_experts;
 
     return cparams;
 }
