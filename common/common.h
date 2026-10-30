@@ -656,6 +656,21 @@ struct common_params {
     bool        chunked_prefill            = false; // [Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging
     bool        latent_mla                 = false; // [Technique #52] Latent FlashMLA Direct Tensor Core MMA (Un-expanded Projection)
 
+    // Phase 15: Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #55 - #63)
+    bool        prefill_head_alias         = true;  // [Technique #55] Prefill Head Aliasing: borrow LM head VRAM for prefill buffers
+    bool        kva_prefill                = false; // [Technique #56] KVA: Late-Layer Recurrence Prefill for long cold prompts
+    int32_t     kva_start_layer            = -1;    // [Technique #56] KVA starting layer (-1: auto 2/3 depth)
+    bool        moe_disjoint_guard         = true;  // [Technique #57] Disjoint Peer Cache Guard: live holds() bitmap check
+    bool        dma_batch                  = true;  // [Technique #58] Batched DMA Engine: cudaMemcpyBatchAsync on CUDA 13+
+    bool        moe_exchange_rot           = true;  // [Technique #59] Exchange Buffer Pointer Rotation: zero-copy RAM swap
+    bool        msg_boundary_cache         = true;  // [Technique #60] Message-Boundary Delta Caching in Radix Tree
+    bool        fused_expdec               = true;  // [Technique #61] QSA_ROWS & EXPDEC Fused Shared-Memory Kernels
+    bool        elastic_vram               = true;  // [Technique #62] Elastic VRAM Management API (/v1/vram)
+    bool        anthropic_protocol         = true;  // [Technique #63] Native Anthropic Messages Protocol (/v1/messages)
+    bool        dsv41_mode                 = false; // DeepSeek V4.1 Flash native execution mode
+    int32_t     dsv41_experts              = 5;     // DeepSeek V4.1 routed experts per word (5: faster mode for <=16GB VRAM, 6: full quality)
+    std::string dsv41_engram_path          = "";    // Path to DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

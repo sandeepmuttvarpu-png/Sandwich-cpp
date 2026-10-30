@@ -4639,6 +4639,162 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             setenv("GGML_CUDA_LATENT_MLA", "0", 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    // Phase 15 Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #55 - #63)
+    add_opt(common_arg(
+        {"--prefill-head-alias"},
+        "enable Technique #55 Prefill Head Aliasing (lends output head VRAM to prompt prefill buffers)",
+        [](common_params & params) {
+            params.prefill_head_alias = true;
+            setenv("SANDWICH_PREFILL_HEAD_ALIAS", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PREFILL_HEAD_ALIAS"));
+    add_opt(common_arg(
+        {"--no-prefill-head-alias"},
+        "disable Prefill Head Aliasing",
+        [](common_params & params) {
+            params.prefill_head_alias = false;
+            setenv("SANDWICH_PREFILL_HEAD_ALIAS", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--kva-prefill"},
+        "enable Technique #56 KVA Late-Layer Recurrence Prefill (skips late MoE compute on cold long prompts)",
+        [](common_params & params) {
+            params.kva_prefill = true;
+            setenv("SANDWICH_KVA_PREFILL", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_KVA_PREFILL"));
+    add_opt(common_arg(
+        {"--no-kva-prefill"},
+        "disable KVA Late-Layer Recurrence Prefill",
+        [](common_params & params) {
+            params.kva_prefill = false;
+            setenv("SANDWICH_KVA_PREFILL", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--kva-start-layer"}, "L",
+        "starting layer index for KVA approximate recurrent state prefill (-1: auto 2/3 depth)",
+        [](common_params & params, int value) {
+            params.kva_start_layer = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_KVA_START_LAYER"));
+
+    add_opt(common_arg(
+        {"--moe-disjoint-guard"},
+        "enable Technique #57 Disjoint Peer Cache Guard (prevents duplicate expert residency across VRAM/RAM tiers)",
+        [](common_params & params) {
+            params.moe_disjoint_guard = true;
+            setenv("STRATA_DISJOINT_ADAPT", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MOE_DISJOINT_GUARD"));
+    add_opt(common_arg(
+        {"--no-moe-disjoint-guard"},
+        "disable Disjoint Peer Cache Guard",
+        [](common_params & params) {
+            params.moe_disjoint_guard = false;
+            setenv("STRATA_DISJOINT_ADAPT", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--dma-batch"},
+        "enable Technique #58 Batched DMA Submissions (cudaMemcpyBatchAsync on CUDA 13+)",
+        [](common_params & params) {
+            params.dma_batch = true;
+            setenv("STRATA_DMA_BATCH", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DMA_BATCH"));
+    add_opt(common_arg(
+        {"--no-dma-batch"},
+        "disable Batched DMA Submissions",
+        [](common_params & params) {
+            params.dma_batch = false;
+            setenv("STRATA_DMA_BATCH", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--moe-exchange-rot"},
+        "enable Technique #59 Exchange Buffer Pointer Rotation (zero-copy host RAM buffer swap)",
+        [](common_params & params) {
+            params.moe_exchange_rot = true;
+            setenv("STRATA_EXCHANGE_ROT", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MOE_EXCHANGE_ROT"));
+    add_opt(common_arg(
+        {"--no-moe-exchange-rot"},
+        "disable Exchange Buffer Pointer Rotation",
+        [](common_params & params) {
+            params.moe_exchange_rot = false;
+            setenv("STRATA_EXCHANGE_ROT", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--msg-cache"},
+        "enable Technique #60 Message-Boundary Delta Caching in Radix Tree for agentic loops",
+        [](common_params & params) {
+            params.msg_boundary_cache = true;
+            setenv("SANDWICH_MSG_CACHE", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MSG_CACHE"));
+
+    add_opt(common_arg(
+        {"--fused-expdec"},
+        "enable Technique #61 QSA_ROWS and EXPDEC Fused Shared-Memory Kernels",
+        [](common_params & params) {
+            params.fused_expdec = true;
+            setenv("STRATA_EXPDEC", "1", 1);
+            setenv("STRATA_QSA_ROWS", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_FUSED_EXPDEC"));
+
+    add_opt(common_arg(
+        {"--elastic-vram"},
+        "enable Technique #62 Elastic VRAM REST Management API (/v1/vram)",
+        [](common_params & params) {
+            params.elastic_vram = true;
+            setenv("SANDWICH_ELASTIC_VRAM", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ELASTIC_VRAM"));
+
+    add_opt(common_arg(
+        {"--anthropic-proto"},
+        "enable Technique #63 Native Anthropic Messages Protocol (/v1/messages)",
+        [](common_params & params) {
+            params.anthropic_protocol = true;
+            setenv("SANDWICH_ANTHROPIC_PROTO", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ANTHROPIC_PROTO"));
+
+    add_opt(common_arg(
+        {"--dsv41"},
+        "enable DeepSeek V4.1 Flash native execution mode",
+        [](common_params & params) {
+            params.dsv41_mode = true;
+            setenv("STRATA_DSV41_MODE", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DSV41"));
+
+    add_opt(common_arg(
+        {"--dsv41-experts"}, "K",
+        "DeepSeek V4.1 routed experts per word (default: 5 for <=16GB VRAM, 6 for full quality)",
+        [](common_params & params, int value) {
+            params.dsv41_experts = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DSV41_EXPERTS"));
+
+    add_opt(common_arg(
+        {"--dsv41-engram"}, "PATH",
+        "path to DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf n-gram SSD lookup table",
+        [](common_params & params, const std::string & value) {
+            params.dsv41_engram_path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DSV41_ENGRAM"));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
