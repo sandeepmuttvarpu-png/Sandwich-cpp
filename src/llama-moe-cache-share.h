@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
+#include <functional>
 #include <stdexcept>
 
 #ifndef GGML_ASSERT
@@ -174,6 +175,16 @@ struct moe_cache_lru {
     // Current batch lock tracking to prevent in-flight eviction of slots needed in the current plan() call
     std::vector<uint32_t> slot_locked;
     uint32_t plan_gen = 0;
+
+    // Technique #57: Disjoint Peer Cache Guard (STRATA_DISJOINT_ADAPT)
+    bool disjoint_guard_enabled = true;
+    std::function<bool(int32_t il, int32_t expert)> peer_holds_fn;
+    size_t stat_disjoint_conflicts_prevented = 0;
+
+    bool peer_holds(int32_t il, int32_t expert) const {
+        if (!disjoint_guard_enabled || !peer_holds_fn) return false;
+        return peer_holds_fn(il, expert);
+    }
 
     // Telemetry statistics
     size_t stat_ghost_hits = 0;
@@ -410,6 +421,13 @@ struct moe_cache_lru {
         std::sort(uniq.begin(), uniq.end());
         for (int32_t e : uniq) {
             if (slots[e] >= 0) {
+                continue;
+            }
+
+            // Technique #57: Disjoint Peer Cache Guard (STRATA_DISJOINT_ADAPT)
+            // If peer tier holds this expert, skip local VRAM promotion to eliminate duplicate slots
+            if (disjoint_guard_enabled && peer_holds(il, e)) {
+                stat_disjoint_conflicts_prevented++;
                 continue;
             }
 

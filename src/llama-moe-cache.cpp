@@ -207,7 +207,23 @@ struct llama_moe_cache::impl {
         size_t tier3_cold_fetches = 0;
         size_t total_cold_bytes = 0;
 
+        // Technique #59: Exchange Buffer Pointer Rotation (STRATA_EXCHANGE_ROT)
+        bool exchange_rotation_active = true;
+        size_t stat_exchange_rotations = 0;
+
+        void rotate_exchange_slot(int32_t s_promoted, int32_t s_evicted) {
+            if (!exchange_rotation_active || s_promoted < 0 || s_evicted < 0) return;
+            if (s_promoted >= n_warm_slots || s_evicted >= n_warm_slots) return;
+            std::swap(warm_slots[s_promoted], warm_slots[s_evicted]);
+            touch_warm(s_promoted);
+            stat_exchange_rotations++;
+        }
+
         void init_lru(int32_t n_slots) {
+            const char * env_rot = std::getenv("STRATA_EXCHANGE_ROT");
+            if (env_rot) {
+                exchange_rotation_active = (std::strcmp(env_rot, "0") != 0);
+            }
             n_warm_slots = n_slots;
             warm_slots_used = 0;
             warm_slots.assign(n_slots, { -1, -1 });
@@ -573,6 +589,15 @@ struct llama_moe_cache::impl {
                 continue;
             }
             g.lru.init(model.layers.size(), n_expert, g.n_slots, moe_2q);
+            const char * env_disjoint = std::getenv("STRATA_DISJOINT_ADAPT");
+            if (env_disjoint) {
+                g.lru.disjoint_guard_enabled = (std::strcmp(env_disjoint, "0") != 0);
+            }
+            g.lru.peer_holds_fn = [this](int32_t il, int32_t expert) -> bool {
+                if (!tier_engine.enabled || il < 0 || (size_t)il >= tier_engine.locators.size()) return false;
+                if (expert < 0 || (size_t)expert >= tier_engine.locators[il].size()) return false;
+                return (tier_engine.locators[il][expert].ram_ptr != nullptr && tier_engine.locators[il][expert].warm_slot >= 0);
+            };
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size();
         }
