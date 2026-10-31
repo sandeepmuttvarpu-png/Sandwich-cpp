@@ -298,6 +298,29 @@ static void test(void) {
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.lora_adapters.size() == 4);
+
+    {
+        printf("test-arg-parser: test Sandwich.cpp Era 8 & Priority flags (Techniques #54, #64, #65, #66)\n\n");
+        common_params s_params;
+        argv = {"binary_name", "-m", "model.gguf", "--yarn-auto", "--attn-sinks", "8", "--unrotated-kv", "--turbo-varn", "--pin-cores", "--kv-type", "turbo4"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), s_params, LLAMA_EXAMPLE_CLI));
+        assert(s_params.dynamic_yarn == true);
+        assert(s_params.n_sink_tokens == 8);
+        assert(s_params.unrotated_kv == true);
+        assert(s_params.turboquant_varn == true);
+        assert(s_params.cpuparams.mask_valid == true);
+        assert(s_params.cpuparams.strict_cpu == 1);
+        assert(s_params.cache_type_k == GGML_TYPE_TURBO4_0);
+        assert(s_params.cache_type_v == GGML_TYPE_TURBO4_0);
+
+        // Test alternative aliases and negation
+        common_params s_params2;
+        argv = {"binary_name", "-m", "model.gguf", "--dynamic-yarn", "--no-unrotated-kv", "--turbo-vran"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), s_params2, LLAMA_EXAMPLE_CLI));
+        assert(s_params2.dynamic_yarn == true);
+        assert(s_params2.unrotated_kv == false);
+        assert(s_params2.turboquant_varn == true);
+    }
     assert(params.lora_adapters[0].path == "file1.gguf");
     assert(params.lora_adapters[1].path == "file2,2.gguf");
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
