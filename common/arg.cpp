@@ -4914,12 +4914,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
     add_opt(common_arg(
         {"--vram-guard"}, "LIMIT",
-        "maximum VRAM ceiling guardrail (e.g. 7100M, 7G)",
+        "maximum VRAM ceiling guardrail (e.g. 7100M, 7G, none)",
         [](common_params & params, const std::string & value) {
             params.vram_guard = value;
             setenv("SANDWICH_VRAM_GUARD", value.c_str(), 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_VRAM_GUARD"));
+
+    add_opt(common_arg(
+        {"--no-vram-guard"},
+        "remove the VRAM ceiling guardrail (use full physical VRAM)",
+        [](common_params & params) {
+            params.vram_guard = "none";
+            setenv("SANDWICH_VRAM_GUARD", "none", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     add_opt(common_arg(
         {"--peer-nodes"}, "ENDPOINTS",

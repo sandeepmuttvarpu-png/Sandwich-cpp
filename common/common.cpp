@@ -1661,7 +1661,29 @@ void sandwich_auto_dispatch(common_params & params) {
 
     // Safety ceiling: 900 MB reserved for Wayland/X11 display server, OS framebuffers, and CUDA runtime context
     int64_t safe_vram_cap_mb = (gpu_total_vram_mb > 1500) ? (gpu_total_vram_mb - 900) : 7100;
-    if (safe_vram_cap_mb > 7100) safe_vram_cap_mb = 7100;
+    if (!params.vram_guard.empty()) {
+        std::string vg = params.vram_guard;
+        if (vg == "none" || vg == "uncapped" || vg == "max" || vg == "0") {
+            safe_vram_cap_mb = (gpu_total_vram_mb > 150) ? (gpu_total_vram_mb - 150) : gpu_total_vram_mb;
+            LOG_INF("   -> [Sandwich VRAM Guard] UNCAPPED MODE ACTIVE (ceiling removed, allocating up to %ld MB)\n", (long)safe_vram_cap_mb);
+        } else {
+            try {
+                size_t end_idx = 0;
+                double val = std::stod(vg, &end_idx);
+                std::string unit = vg.substr(end_idx);
+                if (unit == "G" || unit == "g" || unit == "GB" || unit == "gb" || unit == "GiB") {
+                    safe_vram_cap_mb = (int64_t)(val * 1024.0);
+                } else {
+                    safe_vram_cap_mb = (int64_t)val;
+                }
+                LOG_INF("   -> [Sandwich VRAM Guard] Custom VRAM limit applied: %ld MB\n", (long)safe_vram_cap_mb);
+            } catch (...) {
+                if (safe_vram_cap_mb > 7100) safe_vram_cap_mb = 7100;
+            }
+        }
+    } else {
+        if (safe_vram_cap_mb > 7100) safe_vram_cap_mb = 7100;
+    }
 
     std::string key_block_count = model_arch + ".block_count";
     int64_t block_id = gguf_find_key(gguf_ctx.get(), key_block_count.c_str());
