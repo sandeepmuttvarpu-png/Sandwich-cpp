@@ -670,6 +670,14 @@ struct common_params {
     bool        anthropic_protocol         = true;  // [Technique #63] Native Anthropic Messages Protocol (/v1/messages)
     bool        dynamic_yarn               = true;  // [Technique #64] Dynamic YaRN Auto-Frequency Scaling (zero-tuning 128k context)
     bool        unrotated_kv               = true;  // [Technique #66] Unrotated KV Staging: O(1) zero-copy sliding context shifts
+    // Era 9: P2P Multi-Device Heterogeneous VRAM Pooling & Polar Mesh (Techniques #67 - #72)
+    std::string peer_nodes                 = "";    // [Technique #67] Comma-separated list of peer endpoints (e.g. "10.0.0.2:8088,10.0.0.3:8088")
+    bool        peer_topo                  = true;  // [Technique #68] Asymmetric Heterogeneous Topology Solver
+    bool        peer_dma                   = false; // [Technique #69] Zero-Copy Thunderbolt 4 / USB4 DMA P2P Transport
+    bool        peer_split_kv              = true;  // [Technique #69] Inter-Device Split-KV activation masking
+    bool        peer_turbo_net             = true;  // [Technique #70] Distributed 2-Bit Polar Centroid Quantization over Network
+    bool        peer_spec_pipe             = true;  // [Technique #71] Cross-Node Speculative Verification Pipeline
+    bool        peer_fallback              = true;  // [Technique #72] Dynamic zero-crash failover to local 3-tier offload
     bool        dsv41_mode                 = false; // DeepSeek V4.1 Flash native execution mode
     int32_t     dsv41_experts              = 5;     // DeepSeek V4.1 routed experts per word (5: faster mode for <=16GB VRAM, 6: full quality)
     std::string dsv41_engram_path          = "";    // Path to DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf

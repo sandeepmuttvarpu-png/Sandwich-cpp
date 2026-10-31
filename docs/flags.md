@@ -183,6 +183,32 @@ sandwich.cpp merges upstream llama.cpp parameters with custom MoE expert caching
  --turboquant-varn                   │ None     │ [Technique #54] Closed-Form Dual-Axis Variance Normalization: eliminates long-horizon reasoning drift.          │ Auto (ctx >= 8192)
  --no-turboquant-varn                │ None     │ Disable TurboQuant dual-axis variance normalization.                                                          │             false
 ──────
+## 14. 🧠 Era 8: Dynamic Context Scaling & Attention Guards (Techniques #64 - #66)
+
+ Flag                                │ Argument │ Description                                                                                                   │            Default
+─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
+ --yarn-auto, --dynamic-yarn         │ None     │ [Technique #64] Dynamic YaRN Auto-Frequency Scaling: zero-tuning dynamic context expansion up to 128k.       │             true
+ --no-dynamic-yarn                   │ None     │ Disable Dynamic YaRN auto-frequency scaling.                                                                  │             false
+ --attn-sinks, --sink-tokens         │ N        │ [Technique #65] Universal Attention Sink Guard: keeps first N tokens pinned during sliding context window.    │               4
+ --unrotated-kv                      │ None     │ [Technique #66] Unrotated KV Staging: stores unrotated keys, rotating on-the-fly for O(1) context shifts.     │             true
+ --no-unrotated-kv                   │ None     │ Disable Unrotated KV Staging.                                                                                 │             false
+──────
+## 15. 🌐 Era 9: Peer-to-Peer Heterogeneous VRAM Pooling & Polar Cluster Mesh (Techniques #67 - #72)
+
+ Flag                                │ Argument │ Description                                                                                                   │            Default
+─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
+ --peer-nodes                        │ ENDPOINTS│ [Technique #67] Comma-separated peer endpoints (e.g. 10.0.0.2:8088,10.0.0.3:8088) for VRAM pooling.          │             none
+ --peer-dma                          │ None     │ [Technique #69] Zero-Copy Thunderbolt 4 / USB4 DMA PCIe P2P direct transport.                                 │             false
+ --no-peer-dma                       │ None     │ Disable Thunderbolt DMA and use standard TCP/IP socket streaming.                                             │             true
+ --peer-split-kv                     │ None     │ [Technique #69] Inter-Device Split-KV activation masking across cluster nodes.                                │             true
+ --no-peer-split-kv                  │ None     │ Disable Inter-Device Split-KV activation masking.                                                             │             false
+ --peer-turbo-net                    │ None     │ [Technique #70] 2-Bit Walsh-Hadamard Polar Network compression (8x payload reduction, >0.71 cosine fidelity).│             true
+ --no-peer-turbo-net                 │ None     │ Disable 2-bit polar network compression (transmits uncompressed activations).                                 │             false
+ --peer-spec-pipe                    │ None     │ [Technique #71] Cross-Node Speculative Verification Pipeline with parallel draft token validation.           │             true
+ --no-peer-spec-pipe                 │ None     │ Disable cross-node speculative pipeline.                                                                      │             false
+ --peer-fallback                     │ None     │ [Technique #72] Dynamic Zero-Crash Failover: instantly hot-swaps peer layers to local 3-tier offload.        │             true
+ --no-peer-fallback                  │ None     │ Disable peer failover (abort on peer disconnect).                                                             │             false
+──────
 
 
 

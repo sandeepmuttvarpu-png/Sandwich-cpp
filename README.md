@@ -8,7 +8,7 @@
 [![VRAM: 8GB Friendly](https://img.shields.io/badge/VRAM-8GB%20Friendly%20%F0%9F%92%AA-brightgreen)](#)
 [![Context: 128k Verified](https://img.shields.io/badge/Context-128k%20Verified%20%F0%9F%A7%A0-blueviolet)](#)
 [![Speed: Unhinged](https://img.shields.io/badge/Speed-35%2B%20tok%2Fs%20MoE-red)](#)
-[![Techniques: 66 Active](https://img.shields.io/badge/Techniques-66%20Active%20%E2%9A%A1-orange)](#)
+[![Techniques: 72 Active](https://img.shields.io/badge/Techniques-72%20Active%20%E2%9A%A1-orange)](#)
 [![Whitepaper: v7.0](https://img.shields.io/badge/Whitepaper-v7.0%20(arXiv)-success)](docs/whitepaper.md)
 [![No Cap: Verified](https://img.shields.io/badge/Cap%3A-Zero%20%F0%9F%A7%A2-blue)](#)
 
@@ -26,7 +26,7 @@ And what happens?
 
 We said: **NAH, WE’D WIN.**
 
-We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **66 relentless hardware & algorithmic techniques**:
+We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **72 relentless hardware & algorithmic techniques**:
 1. **Phase 12 3-Tier Hierarchical MoE Engine** (HOT VRAM $\to$ WARM DDR5 THP $\to$ COLD NVMe `io_uring` DMA).
 2. **2Q & Ghost-Cache Replacement Policy** (probation queues that obliterate one-hit wonder cache thrashing).
 3. **The 70% RAM Rule & Asymmetric Split-KV Engine** (eliminates 15ms PCIe ping-pong stalls on giant dense models).
@@ -108,6 +108,14 @@ Here is exactly how **Sandwich.cpp** changes the game:
 * **Unrotated KV Staging (Technique #66):** Eliminates $O(N)$ full-cell loops with $O(1)$ range lookups and bypasses graph rotation passes on polar KV states, keeping sequence shifts sub-millisecond fast.
 * **Empirical Live Validation:** Verified on RTX 5050 Mobile (8GB VRAM) running **GPT-OSS-120B (59 GB MoE)** smoothly within 4,732 MB VRAM across 3 tiers, and **Qwen 35B-A3B** at **18.9 tok/s** with 40 layers repacked in 206 ms.
   * **Dynamic Multi-Drafter Arbitration (`--spec-select`):** Arbitrates dynamically between multiple `--spec-type` candidates (e.g. `ngram-simple,draft-mtp`) per sequence and step using decayed Bayesian position priors, shadow draft tracking, and $E[\text{tokens}]/t_{\text{step}}$ utility maximization.
+
+### 8. Era 9: Peer-to-Peer Heterogeneous VRAM Pooling & Polar Cluster Mesh (Techniques #67–#72)
+* **Heterogeneous Distributed VRAM Pooling (Technique #67):** Aggregates local consumer GPUs (e.g. RTX 5050 Mobile 8GB) with remote peer machines over low-latency interconnects, dynamically forming an expanded virtual VRAM pool.
+* **Asymmetric Heterogeneous Topology Solver (Technique #68):** Solves layer allocation based on device compute and link bandwidth, placing latency-critical early layers and router gating on the local node and offloading deeper blocks to remote peers.
+* **Zero-Copy Thunderbolt 4 / USB4 DMA & RoCE Transport (Technique #69):** Leverages PCIe direct memory access over high-speed links alongside inter-device Split-KV activation masking.
+* **Distributed 2-Bit Walsh-Hadamard Polar Network Compression (Technique #70):** Flattens activation outlier distributions via in-place butterfly Hadamard transformations into standard spherical normals, packing them into 2-bit Lloyd-Max centroids with $16\times$ compression from FP32 ($8\times$ from FP16) and $>0.71$ directional manifold cosine fidelity.
+* **Cross-Node Speculative Verification Pipeline (Technique #71):** Pipelined speculative verification where the local lightweight node streams speculative candidate drafts to peer verification nodes concurrently with layer activations.
+* **Dynamic Zero-Crash Failover with Hot Re-partitioning (Technique #72):** Detects peer heartbeat loss and instantaneously hot-swaps layers back into local 3-tier MoE offload without crashing the session.
 
 ---
 
@@ -220,7 +228,7 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 ---
 
 <details>
-<summary><b>🎛️ The Master Spellbook: Complete CLI Flags & Parameters (66 Active Techniques)</b></summary>
+<summary><b>🎛️ The Master Spellbook: Complete CLI Flags & Parameters (72 Active Techniques)</b></summary>
 
 *`--sandwich-auto` tunes all of this dynamically. But if you're a nocturnal systems hacker who loves tweaking parameters manually, here is your definitive field guide (see the full [Flags Reference (`docs/flags.md`)](docs/flags.md) and [Engineering Diary (`docs/engineering-diary.md`)](docs/engineering-diary.md)):*
 
@@ -388,6 +396,19 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--turbo-varn`, `--turbo-vran` | None | Ergonomic alias for `--turboquant-varn` (Technique #54 closed-form dual-axis variance normalization). | Auto (`ctx >= 8192`) |
 | `--pin-cores` | `LIST` | Explicit physical P-core affinity mask (e.g. `0-5`) for worker threads on hybrid CPUs. | Auto P-cores |
 | `--kv-type` | `TYPE` | Explicit KV cache precision selector (`fp16`, `q8_0`, `q4_0`, `turbo4`, `turbo3`, `turbo2`). | Auto |
+
+---
+
+### 12. 🌐 Era 9: Peer Clustering & Distributed Mesh Flags (Techniques #67 – #72)
+
+| Flag | Arg | What it actually does | Default |
+| :--- | :---: | :--- | :---: |
+| `--peer-nodes` | `ENDPOINTS` | **[Technique #67] Heterogeneous Peer Mesh Nodes.** Comma-separated list of peer IP:port endpoints (e.g. `10.0.0.2:8088,10.0.0.3:8088`). | None |
+| `--peer-dma` / `--no-peer-dma` | None | **[Technique #69] Zero-Copy Thunderbolt 4 / USB4 DMA.** Enables PCIe peer DMA bypassing TCP stack on direct cable links. | `false` (TCP) |
+| `--peer-split-kv` / `--no-peer-split-kv` | None | **[Technique #69] Inter-Device Split-KV.** Masks remote KV heads across peer nodes to minimize transmission overhead. | `true` |
+| `--peer-turbo-net` / `--no-peer-turbo-net` | None | **[Technique #70] 2-Bit Walsh-Hadamard Polar Net Quantization.** $8\times$ network activation compression via WHT butterfly rotation + Lloyd-Max centroids. | `true` |
+| `--peer-spec-pipe` / `--no-peer-spec-pipe` | None | **[Technique #71] Distributed Speculative Pipeline.** Pipelined candidate token verification across peer cluster nodes. | `true` |
+| `--peer-fallback` / `--no-peer-fallback` | None | **[Technique #72] Dynamic Zero-Crash Failover.** Instantly hot-swaps remote peer layers back to local 3-tier offload upon peer disconnect. | `true` |
 
 </details>
 

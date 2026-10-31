@@ -321,6 +321,40 @@ static void test(void) {
         assert(s_params2.unrotated_kv == false);
         assert(s_params2.turboquant_varn == true);
     }
+
+    {
+        printf("test-arg-parser: test Sandwich.cpp Era 9 Peer Mesh flags (Techniques #67-#72)\n\n");
+        common_params p_params;
+        argv = {"binary_name", "-m", "model.gguf",
+                "--peer-nodes", "10.0.0.2:8088,10.0.0.3:8088",
+                "--peer-dma",
+                "--peer-split-kv",
+                "--peer-turbo-net",
+                "--peer-spec-pipe",
+                "--peer-fallback"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), p_params, LLAMA_EXAMPLE_CLI));
+        assert(p_params.peer_nodes == "10.0.0.2:8088,10.0.0.3:8088");
+        assert(p_params.peer_dma == true);
+        assert(p_params.peer_split_kv == true);
+        assert(p_params.peer_turbo_net == true);
+        assert(p_params.peer_spec_pipe == true);
+        assert(p_params.peer_fallback == true);
+
+        // Test negation flags
+        common_params p_params2;
+        argv = {"binary_name", "-m", "model.gguf",
+                "--no-peer-dma",
+                "--no-peer-split-kv",
+                "--no-peer-turbo-net",
+                "--no-peer-spec-pipe",
+                "--no-peer-fallback"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), p_params2, LLAMA_EXAMPLE_CLI));
+        assert(p_params2.peer_dma == false);
+        assert(p_params2.peer_split_kv == false);
+        assert(p_params2.peer_turbo_net == false);
+        assert(p_params2.peer_spec_pipe == false);
+        assert(p_params2.peer_fallback == false);
+    }
     assert(params.lora_adapters[0].path == "file1.gguf");
     assert(params.lora_adapters[1].path == "file2,2.gguf");
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");

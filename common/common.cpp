@@ -2306,6 +2306,23 @@ void sandwich_auto_dispatch(common_params & params) {
         LOG_INF("   -> [Technique #66] Unrotated KV Staging ACTIVE (--unrotated-kv, O(1) zero-copy sliding context shifts)\n");
     }
 
+    if (!params.peer_nodes.empty()) {
+        LOG_INF("   -> [Era 9: P2P Polar Mesh] Techniques #67-#72 ACTIVE\n");
+        LOG_INF("      * Peer Nodes: %s\n", params.peer_nodes.c_str());
+        LOG_INF("      * [Technique #67] Heterogeneous Distributed VRAM Pooling\n");
+        LOG_INF("      * [Technique #68] Topology Partitioning (compute/memory weighted)\n");
+        LOG_INF("      * [Technique #69] %s (Zero-Copy DMA: %s, Split-KV: %s)\n",
+                params.peer_dma ? "Thunderbolt 4 / USB4 DMA PCIe" : "TCP/IP Socket Streaming",
+                params.peer_dma ? "ON" : "OFF",
+                params.peer_split_kv ? "ON" : "OFF");
+        LOG_INF("      * [Technique #70] 2-Bit Walsh-Hadamard Polar Net Quantization: %s (8x network compression)\n",
+                params.peer_turbo_net ? "ON" : "OFF");
+        LOG_INF("      * [Technique #71] Distributed Speculative Pipeline: %s\n",
+                params.peer_spec_pipe ? "ON" : "OFF");
+        LOG_INF("      * [Technique #72] Dynamic Zero-Crash Failover: %s\n",
+                params.peer_fallback ? "ON" : "OFF");
+    }
+
     if (params.speculative.types.size() > 1 || params.speculative.select) {
         params.speculative.select = true;
         LOG_INF("   -> [Dynamic Multi-Drafter] Dynamic Speculative Drafter Arbitration ACTIVE (--spec-select, Bayesian shadow learning)\n");

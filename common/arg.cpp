@@ -4920,6 +4920,94 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             setenv("SANDWICH_VRAM_GUARD", value.c_str(), 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_VRAM_GUARD"));
+
+    add_opt(common_arg(
+        {"--peer-nodes"}, "ENDPOINTS",
+        "comma-separated peer node endpoints (e.g. 10.0.0.2:8088,10.0.0.3:8088) [Technique #67]",
+        [](common_params & params, const std::string & value) {
+            params.peer_nodes = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PEER_NODES"));
+
+    add_opt(common_arg(
+        {"--peer-dma"},
+        "enable Technique #69 Zero-Copy Thunderbolt 4 / USB4 DMA P2P Transport",
+        [](common_params & params) {
+            params.peer_dma = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PEER_DMA"));
+
+    add_opt(common_arg(
+        {"--no-peer-dma"},
+        "disable Zero-Copy Thunderbolt 4 DMA (use standard TCP/IP socket streaming)",
+        [](common_params & params) {
+            params.peer_dma = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--peer-split-kv"},
+        "enable Technique #69 Inter-Device Split-KV activation masking",
+        [](common_params & params) {
+            params.peer_split_kv = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--no-peer-split-kv"},
+        "disable Inter-Device Split-KV activation masking",
+        [](common_params & params) {
+            params.peer_split_kv = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--peer-turbo-net"},
+        "enable Technique #70 2-Bit Walsh-Hadamard Polar Network compression (8x payload reduction)",
+        [](common_params & params) {
+            params.peer_turbo_net = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PEER_TURBO_NET"));
+
+    add_opt(common_arg(
+        {"--no-peer-turbo-net"},
+        "disable 2-Bit Polar Network compression (transmit uncompressed fp16 activations)",
+        [](common_params & params) {
+            params.peer_turbo_net = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--peer-spec-pipe"},
+        "enable Technique #71 Cross-Node Speculative Verification Pipeline",
+        [](common_params & params) {
+            params.peer_spec_pipe = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PEER_SPEC_PIPE"));
+
+    add_opt(common_arg(
+        {"--no-peer-spec-pipe"},
+        "disable Cross-Node Speculative Verification Pipeline",
+        [](common_params & params) {
+            params.peer_spec_pipe = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--peer-fallback"},
+        "enable Technique #72 Dynamic zero-crash failover to local 3-tier MoE offload on peer disconnect",
+        [](common_params & params) {
+            params.peer_fallback = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PEER_FALLBACK"));
+
+    add_opt(common_arg(
+        {"--no-peer-fallback"},
+        "disable peer failover (abort on peer disconnect)",
+        [](common_params & params) {
+            params.peer_fallback = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
