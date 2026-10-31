@@ -98,9 +98,15 @@ Here is exactly how **Sandwich.cpp** changes the game:
 
 ### 6. Frontier Manifold Acceleration: Latent FlashMLA & KV Outlier Channelling
 * **Sandwich.cpp (Techniques #50, #51, #52):**
+  * **Latent FlashMLA (Technique #52):** Directly executes compressed Multi-Head Latent Attention projections on Tensor Cores for DeepSeek architectures, eliminating $7\times$ memory bandwidth overhead.
   * **Asymmetric KV Outlier Channelling (Technique #50):** Channels sensitive keys to `turbo4` while compressing less sensitive values to `turbo2`, squeezing KV footprint to 2.75 bits/token.
   * **Chunked Context Prefill (Technique #51):** Ping-pong activation staging caps transient prefill VRAM under 350MB at 128k context.
-  * **Latent FlashMLA Direct Tensor Core MMA (Technique #52):** Directly executes MMA on compressed MLA manifolds without uncompressing intermediate projections in global memory.
+
+### 7. Era 8: Dynamic YaRN, Attention Sinks & Unrotated KV (Techniques #64–#66)
+* **Dynamic YaRN Auto-Frequency Scaling (Technique #64):** Automatically queries GGUF `n_ctx_train` and dynamically tunes rotary frequency scaling factors on-the-fly, enabling zero-tuning $128\text{k}$ context on any RoPE architecture without manual flag calculation or perplexity blowout.
+* **Universal Attention Sink Guard (Technique #65):** Permanently preserves the first 4 sequence tokens in KV cache across streaming and sliding eviction regimes, guaranteeing Softmax mathematical stability.
+* **Unrotated KV Staging (Technique #66):** Eliminates $O(N)$ full-cell loops with $O(1)$ range lookups and bypasses graph rotation passes on polar KV states, keeping sequence shifts sub-millisecond fast.
+* **Empirical Live Validation:** Verified on RTX 5050 Mobile (8GB VRAM) running **GPT-OSS-120B (59 GB MoE)** smoothly within 4,732 MB VRAM across 3 tiers, and **Qwen 35B-A3B** at **18.9 tok/s** with 40 layers repacked in 206 ms.
   * **Dynamic Multi-Drafter Arbitration (`--spec-select`):** Arbitrates dynamically between multiple `--spec-type` candidates (e.g. `ngram-simple,draft-mtp`) per sequence and step using decayed Bayesian position priors, shadow draft tracking, and $E[\text{tokens}]/t_{\text{step}}$ utility maximization.
 
 ---
@@ -214,7 +220,7 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 ---
 
 <details>
-<summary><b>🎛️ The Master Spellbook: Complete CLI Flags & Parameters (54 Active Techniques)</b></summary>
+<summary><b>🎛️ The Master Spellbook: Complete CLI Flags & Parameters (66 Active Techniques)</b></summary>
 
 *`--sandwich-auto` tunes all of this dynamically. But if you're a nocturnal systems hacker who loves tweaking parameters manually, here is your definitive field guide (see the full [Flags Reference (`docs/flags.md`)](docs/flags.md) and [Engineering Diary (`docs/engineering-diary.md`)](docs/engineering-diary.md)):*
 
@@ -369,9 +375,19 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--dsv41` | None | **[Technique #63] DeepSeek V4.1 Flash Native Engine.** Activates GSQ_RCO sub-2-bit MoE architecture and direct NVMe Engram memory table reader. | `false` |
 | `--dsv41-experts` | `N` | Number of routed experts per word for DeepSeek V4.1 (`5` for faster mode $\le 16$ GB VRAM, `6` for standard). | `5` |
 | `--dsv41-engram` | `PATH` | Path to external 111 GB DeepSeek V4.1 Engram n-gram memory table GGUF file on NVMe SSD. | Auto |
+
+---
+
+### 11. 🧠 Era 8: Dynamic Context & Polar Quantization Flags (Techniques #64 – #66)
+
+| Flag | Arg | What it actually does | Default |
+| :--- | :---: | :--- | :---: |
 | `--yarn-auto`, `--dynamic-yarn` | None | **[Technique #64] Dynamic YaRN Auto-Frequency Scaling.** Automatically scales rotary position embeddings via YaRN when requested context exceeds training length ($128\text{k}$ zero-tuning universal scaling). | `true` |
 | `--attn-sinks`, `--sink-tokens` | `N` | **[Technique #65] Universal Attention Sink Guard.** Permanently preserves initial attention sink tokens during context shifting, preventing streaming/multi-turn quality collapse. | `4` |
 | `--unrotated-kv` | None | **[Technique #66] Unrotated KV Staging.** Stores unrotated keys in KV cache with on-the-fly FlashAttention rotation, enabling $O(1)$ zero-copy sliding context shifts on quantized caches. | `true` |
+| `--turbo-varn`, `--turbo-vran` | None | Ergonomic alias for `--turboquant-varn` (Technique #54 closed-form dual-axis variance normalization). | Auto (`ctx >= 8192`) |
+| `--pin-cores` | `LIST` | Explicit physical P-core affinity mask (e.g. `0-5`) for worker threads on hybrid CPUs. | Auto P-cores |
+| `--kv-type` | `TYPE` | Explicit KV cache precision selector (`fp16`, `q8_0`, `q4_0`, `turbo4`, `turbo3`, `turbo2`). | Auto |
 
 </details>
 
