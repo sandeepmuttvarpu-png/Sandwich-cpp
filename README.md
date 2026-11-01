@@ -240,6 +240,8 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--sandwich-moe-cache-mb` | `N` (MiB) | Explicitly overrides the size of the GPU VRAM expert slab for MoE models (e.g. `4633` for 4.6 GB). | Auto-budgeted |
 | `--sandwich-pcore-threads` | `N` | Binds compute threads strictly to `N` physical P-cores on Intel hybrid CPUs (Alder/Raptor Lake). E-cores are banished. | `6` (all P-cores) |
 | `--no-extra-bufts` | None | **The Anti-Skill-Issue Guard.** Prohibits `-rtr` (row repacking) from allocating host CPU memory that destroys GPU VRAM staging in hybrid mode. | `true` |
+| `--vram-guard` | `LIMIT` | Explicit VRAM allocation ceiling (e.g. `7100M`, `8G`, `6144M`, or `none`/`uncapped`). Guards Wayland/X11 compositors. | Auto (`7100M`) |
+| `--no-vram-guard` | None | Remove the VRAM ceiling guardrail entirely and allocate up to 100% of physical device VRAM. | `false` |
 
 ---
 

@@ -11,6 +11,8 @@ sandwich.cpp merges upstream llama.cpp parameters with custom MoE expert caching
  --sandwich-moe-cache-mb  │ N (MiB)  │ Explicitly overrides the size of the GPU VRAM expert slab for MoE models (e.g. 4633 for 4.6 GB).                                                  │  Auto-budgeted
  --sandwich-pcore-threads │ N        │ Explicitly overrides P-core thread allocation on Intel hybrid CPUs (Alder/Raptor Lake).                                                           │ 6 (all P-cores)
  --no-extra-bufts         │ None     │ The Anti-Pattern Guard: Prohibits -rtr (row-interleaved repacking) from allocating host CPU memory that destroys GPU VRAM staging in hybrid mode. │      true
+ --vram-guard             │ LIMIT    │ Explicit VRAM allocation ceiling (e.g. 7100M, 8G, 6144M, or 'none'/'uncapped'). Dynamically guards Wayland/X11 compositors.                        │  Auto (7100M)
+ --no-vram-guard          │ None     │ Remove the 7100MB VRAM safety guardrail entirely to allocate up to 100% of physical device VRAM.                                                  │     false
 ──────
 ## 2. ⚡ Mixture-of-Experts (MoE) & Caching Flags
 
