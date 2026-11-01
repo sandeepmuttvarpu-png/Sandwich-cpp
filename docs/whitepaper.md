@@ -1,10 +1,10 @@
 
 # Project Sandwich: An Asymmetric Memory Hierarchy and Polar-Quantized Engine for Ultra-Long Context (128K) LLM Inference on Budget Workstations
 
-**Version:** 5.0 (Peer-Reviewed Systems Edition — KVarN Assimilation & Scale Conservation)  
+**Version:** 8.0 (Systems Edition — Peer-to-Peer Polar Mesh & 72 Active Techniques)  
 **Authors:** Sandeep Muttvarpu & The Project Sandwich Research Team  
 **Affiliation:** Independent Systems Research  
-**Date:** October 2026  
+**Date:** November 2026  
 **Artifact Repository:** [`https://github.com/sandeepmuttvarpu-png/Sandwich-cpp`](https://github.com/sandeepmuttvarpu-png/Sandwich-cpp)  
 **Empirical Evidence Corpus:** 1,140 Verified Benchmark Data Points across 11 Heavyweight Models (10B to 117B Parameters)  
 **Evaluation Testbed:** HP Victus Laptop (Intel Core i7-13620H 6P+4E | NVIDIA GeForce RTX 5050 Mobile 8GB GDDR6 | 24GB DDR5-5600 | PCIe 4.0 NVMe)  
@@ -15,12 +15,14 @@
 
 Large Language Models (LLMs) have scaled native context windows to 128,000+ tokens. However, the quadratic Key-Value (KV) cache memory footprint alongside multi-gigabyte parameter weights renders local inference virtually inaccessible on consumer hardware. Conventional runtime engines either terminate prematurely with CUDA Out-Of-Memory (OOM) faults at $\ge 32\text{k}$ context or suffer catastrophic inter-device synchronization stalls when partitioning layer weights across the PCIe bus. 
 
-We present **Project Sandwich**, an end-to-end, hardware-aware C++/CUDA inference engine designed to achieve high-throughput, zero-OOM ultra-context inference on consumer hardware constrained to $\le 8\text{ GB}$ VRAM. Project Sandwich introduces five foundational architectural pillars:
+We present **Project Sandwich**, an end-to-end, hardware-aware C++/CUDA inference engine designed to achieve high-throughput, zero-OOM ultra-context inference on consumer hardware constrained to $\le 8\text{ GB}$ VRAM. Project Sandwich introduces seven foundational architectural pillars:
 1. **TurboQuant Polar Lloyd-Max Quantization:** Compresses the KV cache memory footprint by up to $8\times$ (`turbo4`, `turbo3`, `turbo2`) utilizing randomized Walsh-Hadamard pre-rotation to eliminate outlier activation clipping, executed natively via fused Tensor Core FlashAttention kernels.
 2. **Asymmetric Split-KV & the 70% RAM Rule:** Resolves the mid-graph PCIe roundtrip bottleneck on memory-constrained dense models (30B–70B). When $\ge 70\%$ of weights reside in host RAM, Sandwich pushes 100% of dense weights to host DDR5, completely eliminating inter-layer PCIe handoffs while dedicating 100% of GPU VRAM to the KV cache, FlashAttention execution, and speculative drafter heads.
 3. **Phase 12 3-Tier Hierarchical MoE Memory Engine:** Orchestrates a three-tier memory hierarchy for massive Mixture-of-Experts models (e.g. GPT-OSS-120B, 59 GB weights): Tier 1 (HOT VRAM Expert Slab @ 288 GB/s), Tier 2 (WARM DDR5 2MB Transparent HugePages @ 50 GB/s), and Tier 3 (COLD NVMe storage streamed via Linux kernel `io_uring` direct I/O DMA @ 7,000 MB/s).
 4. **2Q & Ghost-Cache Replacement Policy:** Replaces naive single-queue LRU with a scan-resistant two-queue architecture with ghost tracking, preventing transient one-hit wonder tokens from thrashing the hot expert cache.
-5. **Closed-Form Dual-Axis Variance Normalization (`--turboquant-varn`):** Assimilates the variance-conservation discovery of KVarN (arXiv:2606.03458) into TurboQuant. Resolves spurious attention sink formation and recursive error drift across 10k+ token reasoning chains through on-the-fly warp-shuffle unit-variance norm calibration, achieving exact norm equivalence ($\|\hat{\mathbf{v}}\|^2 \equiv \|\mathbf{v}\|^2$) with 0 bytes metadata overhead, 0 extra DRAM transactions, and 100% FlashMLA manifold invariance.
+5. **Closed-Form Dual-Axis Variance Normalization (`--turboquant-varn`):** Assimilates the variance-conservation discovery of KVarN into TurboQuant. Resolves spurious attention sink formation and recursive error drift across 10k+ token reasoning chains through on-the-fly warp-shuffle unit-variance norm calibration, achieving exact norm equivalence ($\|\hat{\mathbf{v}}\|^2 \equiv \|\mathbf{v}\|^2$) with 0 bytes metadata overhead, 0 extra DRAM transactions, and 100% FlashMLA manifold invariance.
+6. **Strata Assimilation & DeepSeek V4.1 Flash Support (Techniques #55–#63):** Directly streams 111 GB sparse Engram lookup tables off NVMe SSD via async direct-I/O with 5-expert faster mode, combines Prefill Head Aliasing and KVA recurrent state caching to reclaim up to 2.2 GB VRAM during prompt evaluation, and provides live elastic VRAM resizing (`/v1/vram`).
+7. **Peer-to-Peer Polar Cluster Mesh & Heterogeneous Pooling (Techniques #67–#72):** Pools distributed consumer GPUs across local LAN into a unified virtual VRAM fabric. Compresses inter-node activation vectors by $8\times$ using distributed Walsh-Hadamard polar quantization (`--peer-turbo-net`), verifies candidate draft trees ahead of time across nodes (`--peer-spec-pipe`), and provides instantaneous zero-crash failover fallback (`--peer-fallback`) to local 3-tier memory if any peer disconnects.
 
 Empirically validated across **1,140 verified benchmark data points** on 11 state-of-the-art architectures ranging from 10B to 117B parameters, Project Sandwich shatters the 128k context barrier on an 8GB laptop GPU, achieving sustained decoding throughput up to **19.1 t/s at 128,000 tokens** and demonstrating near-zero performance degradation across full multi-turn context saturation.
 
@@ -482,6 +484,30 @@ To facilitate artifact evaluation and independent reproduction, Project Sandwich
     --fused-expdec \
     --vram-guard 7100M \
     --ctx-size 65536
+```
+
+### E. Era 8: Dynamic Context & Polar Quantization (Techniques #64–#66)
+```bash
+./bin/sandwich-cli \
+    --model models/Qwen2.5-72B-Instruct-Q3_K_M.gguf \
+    --dyn-yarn \
+    --dyn-yarn-max 131072 \
+    --attn-sink-protect 8 \
+    --unrot-kv \
+    --sandwich-auto \
+    --ctx-size 131072
+```
+
+### F. Era 9: Peer-to-Peer Polar Mesh & Distributed VRAM Pooling (Techniques #67–#72)
+```bash
+./bin/sandwich-cli \
+    --model models/Qwen3-235B-A22B.gguf \
+    --peer-nodes 192.168.1.102:8088,192.168.1.103:8088 \
+    --peer-turbo-net \
+    --peer-spec-pipe \
+    --peer-fallback \
+    --no-vram-guard \
+    --ctx-size 131072
 ```
 
 # Citations
