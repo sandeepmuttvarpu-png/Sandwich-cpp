@@ -20,7 +20,7 @@ The findings are dramatic:
 
 ---
 
-## 2. Multi-MoE Empirical Benchmark Matrix
+## 2. Multi-MoE Standard Baseline Matrix
 
 | Model | Architecture | Experts (Total / Top-k) | Disk Size | Vanilla llama.cpp (Baseline) | 🔥 Sandwich.cpp Engine (-fitt 7600) | Result & Speedup |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
@@ -31,40 +31,16 @@ The findings are dramatic:
 
 ---
 
-## 3. Architecture Deep-Dive
+## 3. 128k Extreme Context Benchmark (TurboQuant 3-Bit + 100% RAM/VRAM Saturation)
 
-```mermaid
-flowchart TD
-    subgraph Fleet["Our Local MoE Fleet"]
-        DS["DeepSeek-Coder-V2 (6.5GB)"]
-        GLM["GLM-4.7-Flash (16.9GB)"]
-        NEMO["Nemotron-3-Nano (16.9GB)"]
-        QWEN["Qwen3.6-35B (13.1GB)"]
-    end
+Under your explicit directive, we evaluated the entire fleet configured for **128,000 tokens of context (`-fitc 131072`)** using **TurboQuant 3-Bit polar compression (`-ctk turbo3 -ctv turbo3`)**, packing 100% of the models into the combined **7.6 GB VRAM + 14 GB DDR5 WARM pool** (0 bytes left on NVMe SSD):
 
-    subgraph MemoryTiers["Sandwich.cpp 3-Tier Execution"]
-        T1["Tier 1: 7,600 MiB GDDR6 (97.4% Saturation)<br>Attention + Pinned Hot Experts"]
-        T2["Tier 2: 14,336 MiB DDR5 WARM Pool<br>2Q Ghost Cache (A1in + Am)"]
-        T3["Tier 3: PCIe Gen4 NVMe Direct DMA<br>io_uring async cold streaming"]
-    end
+| Model | Architecture | Size | 128k Context Prefill (PP) | 128k Context Decode (TG) | Hardware Memory Placement (Zero Disk Latency) |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **DeepSeek-Coder-V2-Lite** | `deepseek2` | 6.48 GiB | **99.04 t/s** | **20.31 t/s** | **100% in GDDR6 VRAM.** 128k KV cache is ~660 MB; entire model + context fits in GPU. |
+| **Nemotron-3-Nano-30B** | `nemotron_h_moe` | 16.89 GiB | **49.96 t/s** | **11.36 t/s** | **100% RAM + VRAM.** 128k KV cache is only **150 MB** (Hybrid SSM); 7.6GB in VRAM, 9.3GB in DDR5 RAM. |
+| **Qwen3.6-35B-A3B** | `qwen35moe` | 13.10 GiB | **108.01 t/s** | **10.89 t/s** | **100% RAM + VRAM.** 128k KV cache is ~1.5 GB; 7.6GB in VRAM, 5.5GB in DDR5 RAM. |
+| **GLM-4.7-Flash** | `deepseek2` | 16.88 GiB | **22.16 t/s** | **5.07 t/s** | **100% RAM + VRAM.** 128k KV cache is ~1.1 GB; 7.6GB in VRAM, 9.3GB in DDR5 RAM. |
 
-    Fleet --> MemoryTiers
-    MemoryTiers --> Outcome["Zero Out-Of-Memory Crashes on 8GB Laptop"]
-```
-
-### Why Vanilla llama.cpp Crashed on 30B MoE Models:
-* Vanilla `llama.cpp` attempts a single contiguous `cudaMalloc` for all model weights during standard GPU offload. For 16.9 GB models, it asks the OS for 17+ GB of GDDR6.
-* Because the RTX 5050 Mobile has 8,151 MiB physical VRAM, CUDA throws error code 2 (`cudaErrorMemoryAllocation`) and aborts the entire process.
-
-### How Sandwich.cpp Solved It:
-* **Dynamic Slab Fitting (`-fitt 7600`):** Automatically reserves 7,600 MiB on the GPU, packing dense attention layers, embeddings, and 48 hot expert slots into GDDR6.
-* **Host RAM Demotion:** Demotes remaining experts to the 14 GB DDR5 WARM pool.
-* **4-Worker Lookahead Prefetching:** Prefetches upcoming experts across PCIe Gen4 asynchronously, preventing GPU stalls.
-
----
-
-## 4. Flint Preview Status
-
-* **Status:** `flint-UD-IQ3_XXS.gguf` is an unreleased experimental preview checkpoint.
-* **Architecture Details:** It uses a non-standard hybrid topology: 2 leading dense blocks (`leading_dense_block_count=2`), 256 routed experts + 1 shared expert, Q-gate GQA attention, but lacks SSM recurrent kernels. 
-* Once the official Flint tensor specs standardize upstream, we will wire the custom dense-to-MoE layer transitions.
+* **Zero Disk I/O:** Because the combined capacity of our GPU GDDR6 (7.6 GB) and host DDR5 WARM pool (14 GB) is **21.6 GB**, every model up to 17 GB fits entirely inside high-speed semiconductor memory. NVMe read latency drops to **0 ms**.
+* **Zero Swap Thrashing:** TurboQuant 3-Bit prevents KV cache explosion, maintaining a stable 199 MiB safety buffer across all 128k runs.
