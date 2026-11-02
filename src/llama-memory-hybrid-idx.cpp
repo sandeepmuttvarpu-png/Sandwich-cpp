@@ -67,8 +67,14 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
 
         LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
+        // Indexer key cache is read via ggml_get_rows and is tiny (<50MB).
+        // TurboQuant KV types (turbo2, turbo3, turbo4) are tailored for FlashAttention
+        // and cannot be indexed via get_rows, so indexer cache defaults to F16.
+        const ggml_type idx_type_k = (type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0) ? GGML_TYPE_F16 : type_k;
+        const ggml_type idx_type_v = (type_v == GGML_TYPE_TURBO2_0 || type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0) ? GGML_TYPE_F16 : type_v;
+
         return new llama_kv_cache(
-            model, hparams_idx, type_k, type_v, v_trans, offload, unified,
+            model, hparams_idx, idx_type_k, idx_type_v, v_trans, offload, unified,
             kv_size, n_seq_max, n_pad, n_swa, swa_type,
             nullptr, filter_idx, nullptr, nullptr, "idx_");
     }()) {}

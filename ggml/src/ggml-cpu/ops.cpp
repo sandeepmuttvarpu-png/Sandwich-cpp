@@ -5419,6 +5419,8 @@ void ggml_compute_forward_get_rows(
             } break;
         default:
             {
+                fprintf(stderr, "\n[FATAL] ggml_compute_forward_get_rows: unsupported src0->type=%d (%s), dst->type=%d (%s), src0->name='%s', dst->name='%s'\n",
+                    src0->type, ggml_type_name(src0->type), dst->type, ggml_type_name(dst->type), src0->name, dst->name);
                 GGML_ABORT("fatal error");
             }
     }

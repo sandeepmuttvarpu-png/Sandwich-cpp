@@ -563,13 +563,19 @@ TieringPlan HardwareProfiler::calculate_tiering(
 
     // Recommended CLI flags synthesis
     std::ostringstream flags;
-    flags << "-fitt " << max_gpu_budget_mb << " ";
+    if (plan.tier2_warm_ddr5_mb == 0 && plan.tier3_cold_nvme_mb == 0) {
+        // Fits 100% in VRAM
+        flags << "-ngl 99 ";
+    } else {
+        // Multi-tier: Enforce 7,100 MB Wayland VRAM Guard by setting target free margin
+        uint64_t free_margin_mb = (profile.gpu.total_vram_mb > profile.gpu.wayland_guard_vram_mb)
+                                    ? (profile.gpu.total_vram_mb - profile.gpu.wayland_guard_vram_mb)
+                                    : 1024;
+        flags << "-fitt " << free_margin_mb << " ";
+    }
     flags << "-t " << profile.cpu.optimal_threads << " ";
     flags << "-c " << context_length << " ";
     flags << "-fa ";
-    if (is_moe) {
-        flags << "-sm row ";
-    }
     if (kv_quant == "turbo4") {
         flags << "-ctk turbo4 -ctv turbo4 ";
     } else if (kv_quant == "turbo2") {

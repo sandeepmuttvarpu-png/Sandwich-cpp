@@ -424,11 +424,21 @@ void TUIWizard::recompute_tiering_and_command() {
 
     std::ostringstream cmd;
     cmd << "./sandwich run -m " << state.selected_model.file_path << " ";
-    cmd << "-fitt " << profile.gpu.wayland_guard_vram_mb << " ";
+
+    if (state.tiering.tier2_warm_ddr5_mb == 0 && state.tiering.tier3_cold_nvme_mb == 0) {
+        // Fits 100% in VRAM
+        cmd << "-ngl 99 ";
+    } else {
+        // Multi-tier: Enforce 7,100 MB Wayland VRAM Guard by setting target free margin
+        uint64_t free_margin_mb = (profile.gpu.total_vram_mb > profile.gpu.wayland_guard_vram_mb)
+                                    ? (profile.gpu.total_vram_mb - profile.gpu.wayland_guard_vram_mb)
+                                    : 1024;
+        cmd << "-fitt " << free_margin_mb << " ";
+    }
+
     cmd << "-t " << (state.lock_p_cores ? profile.cpu.optimal_threads : profile.cpu.total_logical_cores) << " ";
     cmd << "-c " << state.context_length << " ";
     if (state.flash_attn) cmd << "-fa ";
-    if (state.selected_model.is_moe && state.moe_row_split) cmd << "-sm row ";
     if (state.radix_cache) cmd << "--radix-cache ";
     if (state.spec_tree) cmd << "--spec-tree ";
 
@@ -438,7 +448,7 @@ void TUIWizard::recompute_tiering_and_command() {
     else if (state.kv_quant == "f16") cmd << "-ctk f16 -ctv f16 ";
 
     if (state.use_speculative && !state.selected_drafter.file_path.empty()) {
-        cmd << "-md " << state.selected_drafter.file_path << " ";
+        cmd << "-md " << state.selected_drafter.file_path << " -ngld 0 ";
     }
 
     state.synthesized_command = cmd.str();

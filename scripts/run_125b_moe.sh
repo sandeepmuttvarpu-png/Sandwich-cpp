@@ -16,42 +16,39 @@ echo "======================================================================"
 
 if [ ! -f "${MODEL_SHARD1}" ]; then
     echo "❌ Model shard 1 not found at ${MODEL_SHARD1}"
-    echo "Checking current download progress in .cache..."
-    du -sh "${MODEL_DIR}/.cache/huggingface/download/" 2>/dev/null || true
     exit 1
 fi
 
 PROMPT="${1:-Write a high-performance concurrent work-stealing thread pool in modern C++20 with full lock-free ring buffers.}"
-N_PREDICT="${2:-128}"
+N_PREDICT="${2:-64}"
 
 echo ">> Model        : ${MODEL_SHARD1}"
 if [ -f "${MTP_DRAFTER}" ]; then
-    echo ">> Spec Drafter : ${MTP_DRAFTER}"
-    DRAFT_ARG="--draft-model ${MTP_DRAFTER}"
+    echo ">> Spec Drafter : ${MTP_DRAFTER} (Host RAM Pinned, -ngld 0)"
+    DRAFT_ARG="-md ${MTP_DRAFTER} -ngld 0"
 else
-    echo ">> Spec Drafter : Native Embedded MTP Head"
-    DRAFT_ARG="--native-mtp"
+    echo ">> Spec Drafter : Disabled"
+    DRAFT_ARG=""
 fi
-echo ">> VRAM Fit     : 7,600 MiB (Squeezed 97.4% saturation)"
+echo ">> VRAM Fit     : Target margin 1200 MiB (Strict 7,100 MB Wayland VRAM Guard)"
 echo ">> KV Cache     : TurboQuant 4-Bit (turbo4)"
 echo ">> MoE Streaming: 3-Tier io_uring direct NVMe + 2Q Ghost Cache (14GB DDR5 pool)"
-echo ">> Strata Assim.: Batched PCIe DMA, 4 prefetcher threads, pointer rotation"
+echo ">> Strata Assim.: Batched PCIe DMA, pointer rotation, disjoint guard"
 echo "======================================================================"
 
 exec "${CLI_BIN}" \
     -m "${MODEL_SHARD1}" \
     ${DRAFT_ARG} \
     --sandwich-auto \
-    --sched-async-cpu 1 \
-    --moe-prefetch-threads 4 \
+    --sched-async-cpu \
     --dma-batch \
     --moe-exchange-rot \
     --moe-disjoint-guard \
     --moe-2q \
     --io-uring \
-    -fitt 7600 \
+    -fitt 1200 \
     -ctk turbo4 -ctv turbo4 \
-    -fa 1 \
+    -fa on \
     -t 6 \
     -p "${PROMPT}" \
     -n "${N_PREDICT}"
