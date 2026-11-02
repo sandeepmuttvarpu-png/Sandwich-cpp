@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SandwichModelCache",
+  "description": "Schema for sandwich.cpp cached model catalog and drafter discovery",
+  "type": "object",
+  "required": ["scan_timestamp", "scanned_paths", "models", "drafters"],
+  "properties": {
+    "scan_timestamp": {
+      "type": "integer",
+      "description": "Epoch timestamp when the scan was executed"
+    },
+    "scanned_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ModelEntry"
+      }
+    },
+    "drafters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ModelEntry"
+      }
+    }
+  },
+  "$defs": {
+    "ModelEntry": {
+      "type": "object",
+      "required": ["file_path", "filename", "display_name", "architecture", "quantization", "size_bytes", "is_moe", "is_drafter"],
+      "properties": {
+        "file_path": { "type": "string" },
+        "filename": { "type": "string" },
+        "display_name": { "type": "string" },
+        "architecture": { "type": "string" },
+        "quantization": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "size_gb": { "type": "number", "minimum": 0 },
+        "total_layers": { "type": "integer", "minimum": 0 },
+        "expert_count": { "type": "integer", "minimum": 0 },
+        "active_experts": { "type": "integer", "minimum": 0 },
+        "context_length": { "type": "integer", "minimum": 0 },
+        "is_moe": { "type": "boolean" },
+        "is_drafter": { "type": "boolean" },
+        "drafter_target": { "type": "string" },
+        "last_modified_epoch": { "type": "integer" }
+      }
+    }
+  }
+}

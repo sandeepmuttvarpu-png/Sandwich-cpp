@@ -269,6 +269,11 @@ if (LLAMA_BUILD_APP)
     add_subdirectory(app)
 endif()
 
+# Sandwich Smart-Dispatch & Auto-Tuning Engine
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
+    add_subdirectory(src/dispatch)
+endif()
+
 # Standalone libmtmd build without pulling in the rest of the tools/ tree.
 # Useful when packaging just the mtmd library for language bindings (e.g. an
 # Apple XCFramework, or a WASM build). When the full tools build is enabled,
