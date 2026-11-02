@@ -199,7 +199,7 @@ TurboQuant resolves the KV outlier dilemma by decoupling activation magnitude fr
 4. **Direct Latent Compression for Multi-Head Latent Attention (MLA):**  
    For DeepSeek architectures (e.g., DeepSeek-Coder-V2-Lite, DeepSeek-V3), attention mechanisms replace uncompressed multi-head keys and values with a low-rank latent representation $\mathbf{c}_t^{KV} \in \mathbb{R}^{d_c}$ ($d_c = 512$) along with a decoupled RoPE key vector $\mathbf{k}_t^R \in \mathbb{R}^{d_R}$ ($d_R = 64$). Standard runtimes struggle with MLA quantization because projecting back to full head dimensions before quantization blows up memory traffic. Project Sandwich applies Walsh-Hadamard pre-rotation directly across the 512 dimensions of $\mathbf{c}_t^{KV}$ and the 64 dimensions of $\mathbf{k}_t^R$ prior to codebook quantization. This preserves the compressed latent space throughout the entire lifecycle of the KV cache, achieving a **compounding $36.8\times$ memory reduction relative to standard FP16 MHA** and allowing DeepSeek-Coder-V2-Lite to hold 131,072 context tokens in only 1.2 GB of VRAM.
 
-### 3.2 Asymmetric Split-KV & the 70% RAM Rule (Technique #42)
+### 3.2 Asymmetric Split-KV & the 70% RAM Rule (Technique #39)
 For dense models whose weights exceed physical VRAM capacity:
 $$\text{Let } R_{\text{gpu}} = \frac{N_{\text{gpu\_layers}}}{N_{\text{total\_layers}}}, \quad R_{\text{ram}} = 1.0 - R_{\text{gpu}}$$
 
@@ -208,7 +208,7 @@ $$\text{Let } R_{\text{gpu}} = \frac{N_{\text{gpu\_layers}}}{N_{\text{total\_lay
 * **VRAM Reallocation:** 100% of GPU VRAM is reclaimed to host the TurboQuant KV Cache (`--split-kv`) and an auxiliary speculative drafter ($N_{\text{gpu\_layers\_draft}} = 99$).
 * **PCIe Bubble Elimination:** This eliminates all $2 \times N_{\text{gpu\_layers}}$ inter-device handshakes, recovering **12–18 ms of dead time per step** while drafting at **180+ t/s**.
 
-### 3.3 Phase 12 3-Tier Hierarchical MoE Memory Engine (Techniques #40, #41)
+### 3.3 Phase 12 3-Tier Hierarchical MoE Memory Engine (Techniques #37, #38)
 For massive MoE architectures (e.g. GPT-OSS-120B, 59 GB weights, 128 experts), Sandwich introduces an asynchronous three-tier memory architecture:
 
 1. **Tier 1 (HOT - GPU VRAM @ 288 GB/s):**  
@@ -228,27 +228,17 @@ To prevent transient outlier tokens from flushing established domain experts out
 * **$A_m$ (Protected High-Frequency Pool):** Experts hit $\ge 2$ times are promoted to $A_m$ and protected from rapid eviction.
 * **$A_{1\text{out}}$ (Ghost Cache):** Tracks identifiers of recently evicted experts without storing weights (~8 KB overhead). Subsequent hits on ghost entries immediately trigger promotion back into $A_m$.
 
-### 3.5 Dynamic MoE Softmax Entropy Pruning (Technique #47)
-Standard MoE runtimes unconditionally compute all $K$ selected experts per token. However, empirical analysis of router probability distributions reveals that $>45\%$ of tokens exhibit severe entropy collapse: the top 1 or 2 experts capture $\ge 96\%$ of total routing mass ($\sum_{i=1}^2 P_{(i)} \ge 0.96$).
+### 3.5 Zero-Memory Native MTP Speculative Rollout (Technique #43)
+Traditional speculative decoding requires loading a secondary GGUF draft model (1B–3B parameters), consuming 1.5–3.5 GB of VRAM. Modern architectures (DeepSeek-V3/R1, Gemma-4, Qwen-Flash-Next) incorporate native Multi-Token Prediction (MTP) heads trained directly within the base model weights. Sandwich binds directly to these native MTP heads ($D_1, D_2$), proposing 2 to 3 candidate tokens simultaneously within the primary CUDA stream for EAGLE3 tree verification, eliminating draft model memory overhead completely.
 
-Project Sandwich implements **Cumulative Mass Thresholding ($\tau_{\text{mass}} = 0.96$)**:
-$$\sum_{i=1}^{M} P_{(i)} \ge \tau_{\text{mass}}, \quad M \le K$$
-The engine dynamically prunes the tail $K - M$ experts whenever the cumulative mass threshold is satisfied, reducing cold expert transfers across PCIe and DDR5 by up to **37.4%** with zero measurable coding benchmark degradation ($\Delta\text{PPL} < 0.008$).
-
-### 3.6 GPUDirect Storage (GDS / `libcufile`) Direct NVMe-to-VRAM Bypass (Technique #48)
-To eliminate memory bus contention, Sandwich integrates NVIDIA GPUDirect Storage (GDS) via `cuFileRead`. The NVMe PCIe BAR is mapped directly into CUDA device virtual memory pointers. Tier 3 cold experts stream directly across the PCIe switch into GPU GDDR6 VRAM, reducing host DDR5 memory bus contention to **0 MB/s** and achieving line-rate streaming (~7,000 MB/s) with sub-3ms latency.
-
-### 3.7 Zero-Memory Native MTP Speculative Rollout (Technique #49)
-Traditional speculative decoding requires loading a secondary GGUF draft model (1B–3B parameters), consuming 1.5–3.5 GB of VRAM. Modern architectures (DeepSeek-V3/R1, Gemma-4) incorporate native Multi-Token Prediction (MTP) heads trained directly within the base model weights. Sandwich binds directly to these native MTP heads ($D_1, D_2$), proposing 2 to 3 candidate tokens simultaneously within the primary CUDA stream for EAGLE3 tree verification, eliminating draft model memory overhead completely.
-
-### 3.8 Asymmetric KV Outlier Channelling (K-Polar4 / V-Log2 Extreme Squeeze, Technique #50)
+### 3.6 Asymmetric KV Outlier Channelling (K-Polar4 / V-Log2 Extreme Squeeze, Technique #44)
 Key ($K$) and Value ($V$) tensors exhibit distinct mathematical properties:
 * **Keys:** Contain sharp directional outlier channels that govern RoPE positional geometry and attention dot products; highly sensitive to quantization noise.
 * **Values:** Serve as diffuse feature representations where softmax weighting acts as an intrinsic low-pass filter; highly resilient to aggressive quantization.
 
 Project Sandwich exploits this asymmetry via `--asym-kv-squeeze`: Keys are quantized to `turbo4` (4-bit Polar Lloyd-Max), while Values are quantized to an ultra-compact logarithmic scale (`turbo2`). This yields an average KV cache footprint of **2.75 bits per token**, shrinking a 128k context window from 14 GB down to **under 2.2 GB** while maintaining $>99.8\%$ NIAH retrieval accuracy.
 
-### 3.9 Closed-Form Dual-Axis Variance Normalization (Technique #54, `--turboquant-varn`)
+### 3.7 Closed-Form Dual-Axis Variance Normalization (Technique #48, `--turboquant-varn`)
 In long-horizon reasoning tasks (e.g. 10k–32k token Chain-of-Thought reasoning loops on DeepSeek-R1 and Qwen-2.5-Math), low-bit KV quantization induces systematic scale drift across timesteps:
 $$S_{i,j} = \frac{\mathbf{q}_i^T \mathbf{k}_j}{\sqrt{d}} = \frac{\mathbf{q}_i^T \hat{\mathbf{k}}_j}{\sqrt{d}} \cdot \frac{\|\mathbf{k}_j\|}{\|\hat{\mathbf{k}}_j\|}$$
 When outlier tokens undergo quantization, finite-precision rounding causes the reconstructed vector norm $\|\hat{\mathbf{k}}_j\|$ to deviate from true $\|\mathbf{k}_j\|$ by $\pm 5\%\text{--}10\%$. Because softmax attention is exponential in $S_{i,j}$, tokens with artificially amplified norms act as spurious attention sinks, trapping attention mass and triggering catastrophic hallucinations in deep multi-step reasoning.
@@ -349,13 +339,13 @@ NIAH Semantic Retrieval Accuracy Matrix (DeepSeek-Coder-V2-Lite @ turbo4):
 
 Walsh-Hadamard pre-rotation effectively diffuses outlier energy across orthogonal coordinates, allowing non-uniform Lloyd-Max centroids to capture the continuous semantic geometry without precision collapse.
 
-### 4.6 Radix-Tree Persistent Prefix Caching Acceleration (Technique #45)
+### 4.6 Radix-Tree Persistent Prefix Caching Acceleration (Technique #41)
 In multi-turn autonomous agent interactions (system prompts, tool schemas, conversational context), standard runtimes re-evaluate 2,000–5,000 shared tokens on every turn. Using `sandwich_radix_cache` with $O(L)$ Longest Common Prefix (LCP) matching:
 * **Turn 1 (Cold Prompt Ingestion, 4,096 tokens):** Time to First Token (TTFT) = **1,240 ms**.
 * **Turn 2 (Follow-up Turn, 4,096 prefix + 32 new tokens):** TTFT = **50 ms ($25\times$ speedup)**.
 * **Turn 3 (Tool Call Ingestion, 5,120 prefix + 64 new tokens):** TTFT = **60 ms ($33\times$ speedup)**.
 
-### 4.7 GPT-OSS-120B 3-Tier MoE Memory Telemetry (Technique #40)
+### 4.7 3-Tier MoE Memory Telemetry (Technique #37)
 During continuous 512-token generation on `GPT-OSS-120B` (117B parameter MoE, 59 GB weights on disk):
 ```
 =======================================================

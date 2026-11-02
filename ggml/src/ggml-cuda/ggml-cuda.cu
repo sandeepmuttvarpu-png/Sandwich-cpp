@@ -5194,25 +5194,6 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
         return false;
     }
 
-    // Technique #43: Unified Zero-Copy Memory & UVM Prefetching (cudaMemAdvise)
-    // Advise the CUDA driver that this pinned host buffer is directly accessed by the active GPU device.
-    // On architectures with Compute Capability >= 8.0 (Ampere, Ada, Blackwell), this enables the GPU MMU
-    // to populate hardware page table entries without falling back to host page faults.
-#if CUDART_VERSION >= 11000 && !defined(GGML_USE_MUSA) && !defined(GGML_USE_HIP)
-    int device = 0;
-    if (cudaGetDevice(&device) == cudaSuccess) {
-#if CUDART_VERSION >= 12020
-        cudaMemLocation loc{};
-        loc.type = cudaMemLocationTypeDevice;
-        loc.id = device;
-        (void)cudaMemAdvise(buffer, size, cudaMemAdviseSetAccessedBy, loc);
-#else
-        (void)cudaMemAdvise(buffer, size, cudaMemAdviseSetAccessedBy, device);
-#endif
-        (void)cudaGetLastError(); // Clear error in case driver doesn't support managed advise on this page type
-    }
-#endif
-
     return true;
 #else
     GGML_UNUSED(buffer);

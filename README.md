@@ -275,9 +275,8 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--no-spec-tree` | None | Disables speculative tree decoding and forces linear candidate verification. | `false` |
 | `--spec-tree-depth` | `N` (1-8) | Maximum depth $D$ of the speculative candidate tree. | `3` |
 | `--spec-tree-width` | `N` (1-8) | Maximum branching width $W$ per node for candidate exploration. | `2` |
-| `--spec-tree-adaptive` | None | **[Technique #31] Adaptive PID Controller.** Dynamically modulates tree depth $D(1-7)$ and split threshold based on rolling acceptance rate. | Auto (`--sandwich-auto`) |
-| `--spec-pipe` | None | **[Technique #30] Pipelined Double-Buffered Speculation.** Overlaps GPU drafting of tree $K+1$ with CPU verification of tree $K$. | Auto (`--sandwich-auto`) |
-| `--logits-topk` | `N` | **[Technique #37] GPU Top-K Reduction.** Compacts logits to top-$K$ on GPU, cutting PCIe transfer volume by 99.9%. | `64` (in spec) |
+| `--spec-pipe` | None | **[Technique #28] Pipelined Double-Buffered Speculation.** Overlaps GPU drafting of tree $K+1$ with CPU verification of tree $K$. | Auto (`--sandwich-auto`) |
+| `--logits-topk` | `N` | **[Technique #34] GPU Top-K Reduction.** Compacts logits to top-$K$ on GPU, cutting PCIe transfer volume by 99.9%. | `64` (in spec) |
 
 ---
 
@@ -287,9 +286,9 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | :--- | :---: | :--- | :---: |
 | `-ctk` / `-ctv` | `TYPE` | **TurboQuant Polar Compression.**<br>• `turbo4`: 4-bit (75% VRAM saved, Tensor Core speed).<br>• `turbo3`: 3-bit (81.25% saved, host RAM offload via `-nkvo`).<br>• `turbo2`: 2-bit (87.5% saved, eliminates RAM bus choke at 128k). | `turbo4` (in auto) |
 | `-fa`, `--flash-attn` | `on\|off` | Enables Flash Attention. Accelerates compute and slashes activation memory. | `on` |
-| `-fanq`, `--flash-attn-native-quants` | None | **[Technique #36] Fused Quant FlashAttention.** Fuses dequantization directly inside MMA Tensor Cores (saves 1.25 GB VRAM). | Auto (`--sandwich-auto`) |
-| `--turbo-mma` | None | **[Technique #38] Fused Turbo MMA Attention.** Directly loads PolarQuant tiles into Tensor Core registers without global memory staging. | Auto (`--sandwich-auto`) |
-| `--split-kv`, `--kv-vram` | None | **[Techniques #32 & #42] Asymmetric Split-KV.** Forces KV cache & attention into GPU VRAM even when 100% of weights run on CPU! | Auto (`--sandwich-auto`) |
+| `-fanq`, `--flash-attn-native-quants` | None | **[Technique #33] Fused Quant FlashAttention.** Fuses dequantization directly inside MMA Tensor Cores (saves 1.25 GB VRAM). | Auto (`--sandwich-auto`) |
+| `--turbo-mma` | None | **[Technique #35] Fused Turbo MMA Attention.** Directly loads PolarQuant tiles into Tensor Core registers without global memory staging. | Auto (`--sandwich-auto`) |
+| `--split-kv`, `--kv-vram` | None | **[Techniques #29 & #39] Asymmetric Split-KV.** Forces KV cache & attention into GPU VRAM even when 100% of weights run on CPU! | Auto (`--sandwich-auto`) |
 | `-nkvo`, `--no-kv-offload` | None | Forces KV cache into host system DDR5 RAM instead of GPU VRAM (critical for 128k on massive MoEs). | `0` (in VRAM) |
 | `-cram`, `--cache-ram` | `N` (MiB) | Host RAM buffer for persistent prompt prefix caching (e.g. `4096` = 4GB instant prefix reuse). | `4096` (in auto) |
 | `--cache-idle-slots` | None | Saves idle slots to prompt cache for zero-latency multi-turn agent turns. | `enabled` |
@@ -298,15 +297,12 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 
 ---
 
-### 5. 🛡️ Phase 8 Dense Wing Overhaul Flags (Techniques #25 – #28)
+### 5. 🛡️ Phase 8 Performance & Memory Tuning (Techniques #25 – #30)
 
 | Flag | Arg | What it actually does (No Cap) | Default |
 | :--- | :---: | :--- | :---: |
-| `--jit-down-quant` | None | **[Technique #25] In-Memory JIT CPU Down-Quantization.** Parallel OpenMP pass transcodes CPU layers to `Q2_K` on-the-fly during mmap load. Cuts DDR5 streaming traffic from 9GB to 4.6GB! | Auto (`--sandwich-auto`) |
-| `--cpu-cache-path` | `PATH` | Caches transcoded CPU layers to `<model>.sandwich-cpu.bin`. Warm reboots take **10.4s instead of 1.5 minutes**. | `<model>.sandwich-cpu.bin` |
-| `--thp-align` | None | **[Technique #26] 2MB Transparent HugePages.** Aligns CPU tensors to 2MB boundaries with `madvise(MADV_HUGEPAGE)`. Deletes 12–18% TLB latency. | Auto (`--sandwich-auto`) |
-| `--early-exit-thresh` | `THRESH` | **[Technique #28] Boundary Early-Exit / LayerSkip.** If top-1 confidence at the GPU boundary $\ge 92\%$, skips all CPU layers and emits tokens straight from VRAM at **40+ t/s**! | `0.92` (`0.0` = off) |
-| `--vnni`, `--avx-vnni` | None | **[Technique #33] AVX2-VNNI P-Core Vectorization.** Quadruples dot-product throughput on Raptor Lake P-cores using native `_mm256_dpbusd_epi32`. | Auto (`--sandwich-auto`) |
+| `--thp-align` | None | **[Technique #25] 2MB Transparent HugePages.** Aligns CPU tensors to 2MB boundaries with `madvise(MADV_HUGEPAGE)`. Deletes 12–18% TLB latency. | Auto (`--sandwich-auto`) |
+| `--vnni`, `--avx-vnni` | None | **[Technique #30] AVX2-VNNI P-Core Vectorization.** Quadruples dot-product throughput on Raptor Lake P-cores using native `_mm256_dpbusd_epi32`. | Auto (`--sandwich-auto`) |
 
 ---
 
@@ -350,67 +346,64 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 
 ---
 
-### 9. 🔬 Frontier Architecture & Acceleration Flags (Techniques #43 – #54)
+### 9. 🔬 Frontier Architecture & Acceleration Flags (Techniques #41 – #48)
 
 | Flag | Arg | What it actually does | Default |
 | :--- | :---: | :--- | :---: |
-| `--uvm-zero-copy` | None | **[Technique #43] Unified Zero-Copy Memory & UVM Prefetching.** Registers host DDR5 mmap via `cudaMemAdviseSetAccessedBy`, eliminating manual staging buffers. | Auto (`--sandwich-auto`) |
-| `--radix-cache` | None | **[Technique #45] Radix-Tree Persistent Prefix Caching (RadixAttention).** Sub-millisecond prompt KV reuse on multi-turn conversations; slashes TTFT by $200\times$. | Auto (`--sandwich-auto`) |
+| `--radix-cache` | None | **[Technique #41] Radix-Tree Persistent Prefix Caching (RadixAttention).** Sub-millisecond prompt KV reuse on multi-turn conversations; slashes TTFT by $200\times$. | Auto (`--sandwich-auto`) |
 | `--radix-cache-tokens` | `N` | Maximum number of prompt prefix tokens cached in the dynamic Radix Tree (e.g. `65536`). | `65536` |
-| `--moe-mass-thresh` | `FLOAT` | **[Technique #47] Dynamic MoE Softmax Entropy Pruning.** Drops low-probability routed experts once cumulative weight mass reaches $\tau \ge 0.96$. | `0.96` |
-| `--moe-gds` | None | **[Technique #48] GPUDirect Storage (GDS / libcufile).** Direct NVMe-to-VRAM PCIe DMA bypass for cold experts without host RAM intermediary. | `false` |
-| `--native-mtp` | None | **[Technique #49] Zero-Memory Native MTP Speculative Rollout.** Directly binds to base model Multi-Token Prediction heads for 0MB speculative drafting. | `false` |
-| `--asym-kv-squeeze` | None | **[Technique #50] Asymmetric KV Outlier Channelling.** Quantizes sensitive attention keys to `turbo4` and values to `turbo2` for an extreme 2.75 bits/tok squeeze. | `false` |
-| `--chunked-prefill` | None | **[Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging.** Caps transient prefill VRAM spikes to $<350$ MB even at 128k context. | Auto (`ctx >= 32k`) |
-| `--latent-mla`, `--flash-mla` | None | **[Technique #52] Latent FlashMLA Direct Tensor Core MMA.** Fuses uncompressed MLA manifold projections directly into Tensor Core MMA instructions. | Auto (MLA models) |
-| `--spec-select` | None | **[Technique #53] Dynamic Multi-Drafter Arbitration & Bayesian Shadow Learning.** Arbitrates across multiple drafters (`--spec-type`) to maximize expected token yield per step. | Auto (`--sandwich-auto`) |
-| `--turboquant-varn` | None | **[Technique #54] Closed-Form Dual-Axis Variance Normalization.** Normalizes unit variance in closed form in `set-rows.cu`, eliminating long-horizon 10k+ CoT reasoning drift with 0 tail pool overhead. | Auto (`ctx >= 8192`) |
+| `--native-mtp` | None | **[Technique #43] Zero-Memory Native MTP Speculative Rollout.** Directly binds to base model Multi-Token Prediction heads for 0MB speculative drafting. | `false` |
+| `--asym-kv-squeeze` | None | **[Technique #44] Asymmetric KV Outlier Channelling.** Quantizes sensitive attention keys to `turbo4` and values to `turbo2` for an extreme 2.75 bits/tok squeeze. | `false` |
+| `--chunked-prefill` | None | **[Technique #45] Chunked Context Prefill & Ping-Pong Activation Staging.** Caps transient prefill VRAM spikes to $<350$ MB even at 128k context. | Auto (`ctx >= 32k`) |
+| `--latent-mla`, `--flash-mla` | None | **[Technique #46] Latent FlashMLA Direct Tensor Core MMA.** Fuses uncompressed MLA manifold projections directly into Tensor Core MMA instructions. | Auto (MLA models) |
+| `--spec-select` | None | **[Technique #47] Dynamic Multi-Drafter Arbitration & Bayesian Shadow Learning.** Arbitrates across multiple drafters (`--spec-type`) to maximize expected token yield per step. | Auto (`--sandwich-auto`) |
+| `--turboquant-varn` | None | **[Technique #48] Closed-Form Dual-Axis Variance Normalization.** Normalizes unit variance in closed form in `set-rows.cu`, eliminating long-horizon 10k+ CoT reasoning drift with 0 tail pool overhead. | Auto (`ctx >= 8192`) |
 | `--no-turboquant-varn` | None | Disables TurboQuant closed-form dual-axis variance normalization. | `false` |
 
 ---
 
-### 10. 🥪 Era 7: Strata Assimilation & DeepSeek V4.1 Flags (Techniques #55 – #63)
+### 10. 🥪 Era 7: Strata Assimilation & DeepSeek V4.1 Flags (Techniques #49 – #57)
 
 | Flag | Arg | What it actually does | Default |
 | :--- | :---: | :--- | :---: |
-| `--prefill-head-alias` | None | **[Technique #55] Prefill Head Aliasing.** Borrows output head VRAM during prompt prefill, freeing 1.5–2.2 GB of effective device memory. | `true` |
-| `--kva-prefill` | None | **[Technique #56] KVA Late-Layer Recurrence Prefill.** Skips late MoE layers during deep 32k+ prefill using recurrent attention state projections (+35% to +50% speedup). | Auto (`ctx >= 32k`) |
+| `--prefill-head-alias` | None | **[Technique #49] Prefill Head Aliasing.** Borrows output head VRAM during prompt prefill, freeing 1.5–2.2 GB of effective device memory. | `true` |
+| `--kva-prefill` | None | **[Technique #50] KVA Late-Layer Recurrence Prefill.** Skips late MoE layers during deep 32k+ prefill using recurrent attention state projections (+35% to +50% speedup). | Auto (`ctx >= 32k`) |
 | `--kva-start-layer` | `N` | Starting layer index for KVA recurrent prefill bypass (`-1` = auto layer 30+). | `-1` |
-| `--moe-disjoint-guard` | None | **[Technique #57] Disjoint Peer Cache Guard.** Enforces bitmask ownership checks, eliminating duplicate expert slots across VRAM and DDR5 peer tiers. | `true` |
-| `--dma-batch` | None | **[Technique #58] Batched DMA Engine.** Coalesces expert uploads via `cudaMemcpyBatchAsync` on CUDA 13.4+, cutting PCIe dispatch overhead by 40%. | `true` |
-| `--moe-exchange-rot` | None | **[Technique #59] Exchange Buffer Pointer Rotation.** Swaps virtual host buffer slot descriptors, eliminating DDR5 memcpy during Tier 2 promotions. | `true` |
-| `--msg-cache` | None | **[Technique #60] Message-Boundary Delta Caching.** Snaps prompt prefix matching to ChatML/DeepSeek message boundaries, preventing partial-message drift and enabling fast multi-turn agent edits. | `true` |
-| `--fused-expdec` | None | **[Technique #61] QSA_ROWS & EXPDEC Fused Kernels.** Shared-memory unquantized dot product for IQ1_M / IQ2_XXS / GSQ_RCO representations. | `true` |
-| `--elastic-vram` | None | **[Technique #62] Dynamic Elastic VRAM Resizing Endpoint.** Enables live `GET /v1/vram` and `POST /v1/vram` REST endpoints dynamically adjusting cache budgets with a strict 7,100 MB Wayland guard. | `true` |
-| `--dsv41` | None | **[Technique #63] DeepSeek V4.1 Flash Native Engine.** Activates GSQ_RCO sub-2-bit MoE architecture and direct NVMe Engram memory table reader. | `false` |
+| `--moe-disjoint-guard` | None | **[Technique #51] Disjoint Peer Cache Guard.** Enforces bitmask ownership checks, eliminating duplicate expert slots across VRAM and DDR5 peer tiers. | `true` |
+| `--dma-batch` | None | **[Technique #52] Batched DMA Engine.** Coalesces expert uploads via `cudaMemcpyBatchAsync` on CUDA 13.4+, cutting PCIe dispatch overhead by 40%. | `true` |
+| `--moe-exchange-rot` | None | **[Technique #53] Exchange Buffer Pointer Rotation.** Swaps virtual host buffer slot descriptors, eliminating DDR5 memcpy during Tier 2 promotions. | `true` |
+| `--msg-cache` | None | **[Technique #54] Message-Boundary Delta Caching.** Snaps prompt prefix matching to ChatML/DeepSeek message boundaries, preventing partial-message drift and enabling fast multi-turn agent edits. | `true` |
+| `--fused-expdec` | None | **[Technique #55] QSA_ROWS & EXPDEC Fused Kernels.** Shared-memory unquantized dot product for IQ1_M / IQ2_XXS / GSQ_RCO representations. | `true` |
+| `--elastic-vram` | None | **[Technique #56] Dynamic Elastic VRAM Resizing Endpoint.** Enables live `GET /v1/vram` and `POST /v1/vram` REST endpoints dynamically adjusting cache budgets with a strict 7,100 MB Wayland guard. | `true` |
+| `--dsv41` | None | **[Technique #57] DeepSeek V4.1 Flash Native Engine.** Activates GSQ_RCO sub-2-bit MoE architecture and direct NVMe Engram memory table reader. | `false` |
 | `--dsv41-experts` | `N` | Number of routed experts per word for DeepSeek V4.1 (`5` for faster mode $\le 16$ GB VRAM, `6` for standard). | `5` |
 | `--dsv41-engram` | `PATH` | Path to external 111 GB DeepSeek V4.1 Engram n-gram memory table GGUF file on NVMe SSD. | Auto |
 
 ---
 
-### 11. 🧠 Era 8: Dynamic Context & Polar Quantization Flags (Techniques #64 – #66)
+### 11. 🧠 Era 8: Dynamic Context & Polar Quantization Flags (Techniques #58 – #60)
 
 | Flag | Arg | What it actually does | Default |
 | :--- | :---: | :--- | :---: |
-| `--yarn-auto`, `--dynamic-yarn` | None | **[Technique #64] Dynamic YaRN Auto-Frequency Scaling.** Automatically scales rotary position embeddings via YaRN when requested context exceeds training length ($128\text{k}$ zero-tuning universal scaling). | `true` |
-| `--attn-sinks`, `--sink-tokens` | `N` | **[Technique #65] Universal Attention Sink Guard.** Permanently preserves initial attention sink tokens during context shifting, preventing streaming/multi-turn quality collapse. | `4` |
-| `--unrotated-kv` | None | **[Technique #66] Unrotated KV Staging.** Stores unrotated keys in KV cache with on-the-fly FlashAttention rotation, enabling $O(1)$ zero-copy sliding context shifts on quantized caches. | `true` |
-| `--turbo-varn`, `--turbo-vran` | None | Ergonomic alias for `--turboquant-varn` (Technique #54 closed-form dual-axis variance normalization). | Auto (`ctx >= 8192`) |
+| `--yarn-auto`, `--dynamic-yarn` | None | **[Technique #58] Dynamic YaRN Auto-Frequency Scaling.** Automatically scales rotary position embeddings via YaRN when requested context exceeds training length ($128\text{k}$ zero-tuning universal scaling). | `true` |
+| `--attn-sinks`, `--sink-tokens` | `N` | **[Technique #59] Universal Attention Sink Guard.** Permanently preserves initial attention sink tokens during context shifting, preventing streaming/multi-turn quality collapse. | `4` |
+| `--unrotated-kv` | None | **[Technique #60] Unrotated KV Staging.** Stores unrotated keys in KV cache with on-the-fly FlashAttention rotation, enabling $O(1)$ zero-copy sliding context shifts on quantized caches. | `true` |
+| `--turbo-varn`, `--turbo-vran` | None | Ergonomic alias for `--turboquant-varn` (Technique #48 closed-form dual-axis variance normalization). | Auto (`ctx >= 8192`) |
 | `--pin-cores` | `LIST` | Explicit physical P-core affinity mask (e.g. `0-5`) for worker threads on hybrid CPUs. | Auto P-cores |
 | `--kv-type` | `TYPE` | Explicit KV cache precision selector (`fp16`, `q8_0`, `q4_0`, `turbo4`, `turbo3`, `turbo2`). | Auto |
 
 ---
 
-### 12. 🌐 Era 9: Peer Clustering & Distributed Mesh Flags (Techniques #67 – #72)
+### 12. 🌐 Era 9: Peer Clustering & Distributed Mesh Flags (Techniques #61 – #66)
 
 | Flag | Arg | What it actually does | Default |
 | :--- | :---: | :--- | :---: |
-| `--peer-nodes` | `ENDPOINTS` | **[Technique #67] Heterogeneous Peer Mesh Nodes.** Comma-separated list of peer IP:port endpoints (e.g. `10.0.0.2:8088,10.0.0.3:8088`). | None |
-| `--peer-dma` / `--no-peer-dma` | None | **[Technique #69] Zero-Copy Thunderbolt 4 / USB4 DMA.** Enables PCIe peer DMA bypassing TCP stack on direct cable links. | `false` (TCP) |
-| `--peer-split-kv` / `--no-peer-split-kv` | None | **[Technique #69] Inter-Device Split-KV.** Masks remote KV heads across peer nodes to minimize transmission overhead. | `true` |
-| `--peer-turbo-net` / `--no-peer-turbo-net` | None | **[Technique #70] 2-Bit Walsh-Hadamard Polar Net Quantization.** $8\times$ network activation compression via WHT butterfly rotation + Lloyd-Max centroids. | `true` |
-| `--peer-spec-pipe` / `--no-peer-spec-pipe` | None | **[Technique #71] Distributed Speculative Pipeline.** Pipelined candidate token verification across peer cluster nodes. | `true` |
-| `--peer-fallback` / `--no-peer-fallback` | None | **[Technique #72] Dynamic Zero-Crash Failover.** Instantly hot-swaps remote peer layers back to local 3-tier offload upon peer disconnect. | `true` |
+| `--peer-nodes` | `ENDPOINTS` | **[Technique #61] Heterogeneous Peer Mesh Nodes.** Comma-separated list of peer IP:port endpoints (e.g. `10.0.0.2:8088,10.0.0.3:8088`). | None |
+| `--peer-dma` / `--no-peer-dma` | None | **[Technique #63] Zero-Copy Thunderbolt 4 / USB4 DMA.** Enables PCIe peer DMA bypassing TCP stack on direct cable links. | `false` (TCP) |
+| `--peer-split-kv` / `--no-peer-split-kv` | None | **[Technique #63] Inter-Device Split-KV.** Masks remote KV heads across peer nodes to minimize transmission overhead. | `true` |
+| `--peer-turbo-net` / `--no-peer-turbo-net` | None | **[Technique #64] 2-Bit Walsh-Hadamard Polar Net Quantization.** $8\times$ network activation compression via WHT butterfly rotation + Lloyd-Max centroids. | `true` |
+| `--peer-spec-pipe` / `--no-peer-spec-pipe` | None | **[Technique #65] Distributed Speculative Pipeline.** Pipelined candidate token verification across peer cluster nodes. | `true` |
+| `--peer-fallback` / `--no-peer-fallback` | None | **[Technique #66] Dynamic Zero-Crash Failover.** Instantly hot-swaps remote peer layers back to local 3-tier offload upon peer disconnect. | `true` |
 
 </details>
 

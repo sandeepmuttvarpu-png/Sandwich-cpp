@@ -112,37 +112,30 @@ sandwich.cpp merges upstream llama.cpp parameters with custom MoE expert caching
  --repeat-penalty                           │ FLOAT                                     │ Repetition penalty factor (1.0 = disabled, 1.1 = mild penalty).      │                    1.0
  -n, --predict                              │ N                                         │ Number of tokens to predict (-1 = infinity, -2 = fill context).      │                    -1
 ──────
-## 8. 🛡️ Phase 8 Dense Wing Overhaul Flags (Techniques #25 - #28)
+## 8. 🛡️ Phase 8 Performance & Memory Tuning (Technique #25)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --jit-down-quant                    │ None     │ [P1] In-Memory JIT CPU Down-Quantization: Transcode CPU layers to Q2_K in-memory during mmap (cuts DDR5 load ~50%).│     Auto (--sandwich-auto)
- --no-jit-down-quant                 │ None     │ Disable in-memory JIT down-quantization of CPU-offloaded layers.                                              │             false
- --jit-down-quant-start-layer        │ N        │ First layer index to down-quantize in CPU memory (-1 = first CPU layer).                                      │              -1
- --cpu-cache-path                    │ FNAME    │ Explicit path to save/load persistent transcoded CPU layer cache sidecar (<model>.sandwich-cpu.bin).         │ <model>.sandwich-cpu.bin
- --thp-align                         │ None     │ [P2] 2MB Transparent HugePages (THP) Alignment: Align CPU allocations to 2MB boundaries & madvise(MADV_HUGEPAGE). │     Auto (--sandwich-auto)
+ --thp-align                         │ None     │ [Technique #25] 2MB Transparent HugePages (THP) Alignment: Align CPU allocations to 2MB boundaries & madvise. │     Auto (--sandwich-auto)
  --no-thp-align                      │ None     │ Disable 2MB THP alignment for host CPU memory allocations.                                                    │             false
- --early-exit-thresh                 │ THRESH   │ [P4] Boundary Early-Exit / Dynamic LayerSkip: Softmax confidence threshold to emit token directly from VRAM.  │      0.92 (0.0 = off)
 ──────
-## 9. 🧠 Phase 9 Predictive Hardware-Aware Topology & TurboQuant Auto-Router (Technique #29)
+## 9. 🧠 Phase 9 Predictive Hardware-Aware Topology & TurboQuant Auto-Router (Technique #27)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --sandwich-predict                  │ None     │ [Technique #29] Automatically predicts Asymmetric Split vs. Hybrid Offload and auto-routes TurboQuant KV.     │      true (in auto)
+ --sandwich-predict                  │ None     │ [Technique #27] Automatically predicts Asymmetric Split vs. Hybrid Offload and auto-routes TurboQuant KV.     │      true (in auto)
  --no-sandwich-predict               │ None     │ Disable predictive solver and TurboQuant auto-routing (forces static layer fitting).                          │             false
 ──────
-## 10. 🏎️ Phase 10 & 11 Pipeline Overhaul & Hardware Push (Techniques #30 - #35)
+## 10. 🏎️ Phase 10 & 11 Pipeline Overhaul & Hardware Push (Techniques #28 - #32)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --spec-pipe                         │ None     │ [P1 / #30] Pipelined Double-Buffered Speculative Execution: Overlaps GPU drafting and CPU verification.      │     Auto (--sandwich-auto)
+ --spec-pipe                         │ None     │ [Technique #28] Pipelined Double-Buffered Speculative Execution: Overlaps GPU drafting and CPU verification.  │     Auto (--sandwich-auto)
  --no-spec-pipe                      │ None     │ Disable double-buffered speculative pipelining (forces sequential lock-step execution).                       │             false
- --spec-tree-adaptive                │ None     │ [P2 / #31] Adaptive Spec-Tree PID Controller: Dynamically tunes tree depth D(1-7) & split p(0.05-0.40).       │     Auto (--sandwich-auto)
- --no-spec-tree-adaptive             │ None     │ Disable PID dynamic speculative tree parameter adaptation.                                                    │             false
- --split-kv, --kv-vram               │ None     │ [P3 / #32] Asymmetric Split-KV Engine: Pure VRAM KV Cache on CPU-offloaded models (n_gpu_layers=0).          │     Auto (--sandwich-auto)
- --vnni, --avx-vnni                  │ None     │ [P4 / #33] AVX2-VNNI P-Core Vector Execution: Native dpbusd dot-product vectorization for Q2_K & IQ2_XXS.     │     Auto (--sandwich-auto)
- --preset agent                      │ None     │ [P5 / #34] One-Click Agent Server Preset: Configures 64K context, turbo4 KV, persistent prompt cache & slots.│             false
- --fp4, --mxfp4                      │ None     │ [P6 / #35] Blackwell Native FP4 / MXFP4 Tensor Offload: Offloads NVFP4/MXFP4 layers to sm_120 Tensor Cores.  │             false
+ --split-kv, --kv-vram               │ None     │ [Technique #29] Asymmetric Split-KV Engine: Pure VRAM KV Cache on CPU-offloaded models (n_gpu_layers=0).      │     Auto (--sandwich-auto)
+ --vnni, --avx-vnni                  │ None     │ [Technique #30] AVX2-VNNI P-Core Vector Execution: Native dpbusd dot-product vectorization for Q2_K & IQ2_XXS. │     Auto (--sandwich-auto)
+ --preset agent                      │ None     │ [Technique #31] One-Click Agent Server Preset: Configures 64K context, turbo4 KV, persistent prompt cache.    │             false
+ --fp4, --mxfp4                      │ None     │ [Technique #32] Blackwell Native FP4 / MXFP4 Tensor Offload: Offloads NVFP4/MXFP4 layers to sm_120.           │             false
 ──────
 ## 11. 🚀 Phase 12 External High-Impact Native Kernels & Latency Eliminators (Techniques #36 - #39)
 
@@ -154,61 +147,56 @@ sandwich.cpp merges upstream llama.cpp parameters with custom MoE expert caching
  --turbo-mma                         │ None     │ [Technique #38] Fused Turbo MMA FlashAttention: Fuses PolarQuant turbo4/3/2 tile loading directly into MMA.   │     Auto (--sandwich-auto)
  --sched-async-cpu                   │ None     │ [Technique #39] Asynchronous CPU Split Worker Overlap: Runs CPU graph splits on worker thread behind GPU.   │     Auto (--sandwich-auto)
 ──────
-## 12. ⚡ Phase 12 3-Tier Hierarchical MoE Memory System Engine (Technique #40)
+## 12. ⚡ Phase 12 3-Tier Hierarchical MoE Memory System Engine (Technique #37)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --moe-3tier                         │ None     │ [Phase 12] 3-Tier Hierarchical MoE Memory System: HOT VRAM (GDDR6) -> WARM DDR5 (THP) -> COLD NVMe (io_uring).│     Auto (--sandwich-auto)
+ --moe-3tier                         │ None     │ [Technique #37] 3-Tier Hierarchical MoE Memory System: HOT VRAM (GDDR6) -> WARM DDR5 (THP) -> COLD NVMe.    │     Auto (--sandwich-auto)
  --no-moe-3tier                      │ None     │ Disable 3-tier hierarchical MoE memory system (falls back to 2-tier).                                         │             false
  --moe-warm-ram-mb                   │ N (MiB)  │ Dedicated Tier 2 WARM DDR5 RAM pool budget in MiB backed by 2MB Transparent Huge Pages (default: 12288 / 12GB)│            12288
 ──────
-## 13. 🔬 Phase 13 & 14 Frontier Architecture & Compression Techniques (Techniques #43 - #52)
+## 13. 🔬 Phase 13 & 14 Frontier Architecture & Compression Techniques (Techniques #41 - #48)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --uvm-zero-copy                     │ None     │ [Technique #43] Unified Zero-Copy Memory & UVM Prefetching: registers host DDR5 mmap via cudaMemAdviseSetAccessedBy.│     Auto (--sandwich-auto)
- --no-uvm-zero-copy                  │ None     │ Disable unified zero-copy memory and UVM driver prefetching.                                                  │             false
- --radix-cache                       │ None     │ [Technique #45] Radix-Tree Persistent Prefix Caching (RadixAttention): sub-ms KV reuse on multi-turn prompts. │     Auto (--sandwich-auto)
+ --radix-cache                       │ None     │ [Technique #41] Radix-Tree Persistent Prefix Caching (RadixAttention): sub-ms KV reuse on multi-turn prompts. │     Auto (--sandwich-auto)
  --no-radix-cache                    │ None     │ Disable Radix-Tree persistent prefix caching.                                                                 │             false
- --radix-cache-tokens                │ N        │ [Technique #45] Maximum number of prompt prefix tokens cached in the dynamic Radix Tree (default: 65536).     │            65536
- --moe-mass-thresh                   │ FLOAT    │ [Technique #47] Dynamic MoE Softmax Entropy Pruning: drops routed experts once cumulative mass >= tau (0.96). │             0.96
- --moe-gds                           │ None     │ [Technique #48] GPUDirect Storage (GDS / libcufile): direct NVMe-to-VRAM PCIe DMA bypass for cold experts.   │             false
- --no-moe-gds                        │ None     │ Disable GPUDirect Storage and fall back to io_uring / host buffer staging.                                    │             true
- --native-mtp                        │ None     │ [Technique #49] Zero-Memory Native MTP Speculative Rollout: binds directly to base model MTP heads (0MB draft).│            false
+ --radix-cache-tokens                │ N        │ [Technique #41] Maximum number of prompt prefix tokens cached in the dynamic Radix Tree (default: 65536).     │            65536
+ --native-mtp                        │ None     │ [Technique #43] Zero-Memory Native MTP Speculative Rollout: binds directly to base model MTP heads (0MB draft).│            false
  --no-native-mtp                     │ None     │ Disable native Multi-Token Prediction speculative rollout.                                                    │             true
- --asym-kv-squeeze                   │ None     │ [Technique #50] Asymmetric KV Outlier Channelling: Keys to turbo4, Values to turbo2 (2.75 bits/tok squeeze). │             false
- --chunked-prefill                   │ None     │ [Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging: caps prefill transient VRAM < 350MB.  │     Auto (ctx >= 32k)
+ --asym-kv-squeeze                   │ None     │ [Technique #44] Asymmetric KV Outlier Channelling: Keys to turbo4, Values to turbo2 (2.75 bits/tok squeeze). │             false
+ --chunked-prefill                   │ None     │ [Technique #45] Chunked Context Prefill & Ping-Pong Activation Staging: caps prefill transient VRAM < 350MB.  │     Auto (ctx >= 32k)
  --no-chunked-prefill                │ None     │ Disable chunked context prefill and evaluate entire prompt in a single pass.                                  │             false
- --latent-mla, --flash-mla           │ None     │ [Technique #52] Latent FlashMLA Direct Tensor Core MMA: fuses uncompressed MLA manifold projection into MMA.  │     Auto (MLA models)
+ --latent-mla, --flash-mla           │ None     │ [Technique #46] Latent FlashMLA Direct Tensor Core MMA: fuses uncompressed MLA manifold projection into MMA.  │     Auto (MLA models)
  --no-latent-mla, --no-flash-mla     │ None     │ Disable direct Latent FlashMLA and uncompress full multi-head tensors in memory.                              │             false
- --spec-select                       │ None     │ [Piggidragon/Strata Port] Dynamic Multi-Drafter Arbitration: per-step expected token utility max over multiple drafters. │ Auto (--sandwich-auto)
- --turboquant-varn                   │ None     │ [Technique #54] Closed-Form Dual-Axis Variance Normalization: eliminates long-horizon reasoning drift.          │ Auto (ctx >= 8192)
+ --spec-select                       │ None     │ [Technique #47] Dynamic Multi-Drafter Arbitration: per-step expected token utility max over multiple drafters. │ Auto (--sandwich-auto)
+ --turboquant-varn                   │ None     │ [Technique #48] Closed-Form Dual-Axis Variance Normalization: eliminates long-horizon reasoning drift.          │ Auto (ctx >= 8192)
  --no-turboquant-varn                │ None     │ Disable TurboQuant dual-axis variance normalization.                                                          │             false
 ──────
-## 14. 🧠 Era 8: Dynamic Context Scaling & Attention Guards (Techniques #64 - #66)
+## 14. 🧠 Era 8: Dynamic Context Scaling & Attention Guards (Techniques #58 - #60)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --yarn-auto, --dynamic-yarn         │ None     │ [Technique #64] Dynamic YaRN Auto-Frequency Scaling: zero-tuning dynamic context expansion up to 128k.       │             true
+ --yarn-auto, --dynamic-yarn         │ None     │ [Technique #58] Dynamic YaRN Auto-Frequency Scaling: zero-tuning dynamic context expansion up to 128k.       │             true
  --no-dynamic-yarn                   │ None     │ Disable Dynamic YaRN auto-frequency scaling.                                                                  │             false
- --attn-sinks, --sink-tokens         │ N        │ [Technique #65] Universal Attention Sink Guard: keeps first N tokens pinned during sliding context window.    │               4
- --unrotated-kv                      │ None     │ [Technique #66] Unrotated KV Staging: stores unrotated keys, rotating on-the-fly for O(1) context shifts.     │             true
+ --attn-sinks, --sink-tokens         │ N        │ [Technique #59] Universal Attention Sink Guard: keeps first N tokens pinned during sliding context window.    │               4
+ --unrotated-kv                      │ None     │ [Technique #60] Unrotated KV Staging: stores unrotated keys, rotating on-the-fly for O(1) context shifts.     │             true
  --no-unrotated-kv                   │ None     │ Disable Unrotated KV Staging.                                                                                 │             false
 ──────
-## 15. 🌐 Era 9: Peer-to-Peer Heterogeneous VRAM Pooling & Polar Cluster Mesh (Techniques #67 - #72)
+## 15. 🌐 Era 9: Peer-to-Peer Heterogeneous VRAM Pooling & Polar Cluster Mesh (Techniques #61 - #66)
 
  Flag                                │ Argument │ Description                                                                                                   │            Default
 ─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
- --peer-nodes                        │ ENDPOINTS│ [Technique #67] Comma-separated peer endpoints (e.g. 10.0.0.2:8088,10.0.0.3:8088) for VRAM pooling.          │             none
- --peer-dma                          │ None     │ [Technique #69] Zero-Copy Thunderbolt 4 / USB4 DMA PCIe P2P direct transport.                                 │             false
+ --peer-nodes                        │ ENDPOINTS│ [Technique #61] Comma-separated peer endpoints (e.g. 10.0.0.2:8088,10.0.0.3:8088) for VRAM pooling.          │             none
+ --peer-dma                          │ None     │ [Technique #63] Zero-Copy Thunderbolt 4 / USB4 DMA PCIe P2P direct transport.                                 │             false
  --no-peer-dma                       │ None     │ Disable Thunderbolt DMA and use standard TCP/IP socket streaming.                                             │             true
- --peer-split-kv                     │ None     │ [Technique #69] Inter-Device Split-KV activation masking across cluster nodes.                                │             true
+ --peer-split-kv                     │ None     │ [Technique #63] Inter-Device Split-KV activation masking across cluster nodes.                                │             true
  --no-peer-split-kv                  │ None     │ Disable Inter-Device Split-KV activation masking.                                                             │             false
- --peer-turbo-net                    │ None     │ [Technique #70] 2-Bit Walsh-Hadamard Polar Network compression (8x payload reduction, >0.71 cosine fidelity).│             true
+ --peer-turbo-net                    │ None     │ [Technique #64] 2-Bit Walsh-Hadamard Polar Network compression (8x payload reduction, >0.71 cosine fidelity).│             true
  --no-peer-turbo-net                 │ None     │ Disable 2-bit polar network compression (transmits uncompressed activations).                                 │             false
- --peer-spec-pipe                    │ None     │ [Technique #71] Cross-Node Speculative Verification Pipeline with parallel draft token validation.           │             true
+ --peer-spec-pipe                    │ None     │ [Technique #65] Cross-Node Speculative Verification Pipeline with parallel draft token validation.           │             true
  --no-peer-spec-pipe                 │ None     │ Disable cross-node speculative pipeline.                                                                      │             false
- --peer-fallback                     │ None     │ [Technique #72] Dynamic Zero-Crash Failover: instantly hot-swaps peer layers to local 3-tier offload.        │             true
+ --peer-fallback                     │ None     │ [Technique #66] Dynamic Zero-Crash Failover: instantly hot-swaps peer layers to local 3-tier offload.        │             true
  --no-peer-fallback                  │ None     │ Disable peer failover (abort on peer disconnect).                                                             │             false
 ──────
 

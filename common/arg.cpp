@@ -4397,33 +4397,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE_WIDTH"));
     add_opt(common_arg(
-        {"--jit-down-quant"},
-        "enable in-memory JIT down-quantization of CPU layers to Q2_K (cuts DDR5 load ~50%)",
-        [](common_params & params) {
-            params.jit_down_quant = true;
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_JIT_DOWN_QUANT"));
-    add_opt(common_arg(
-        {"--no-jit-down-quant"},
-        "disable in-memory JIT down-quantization of CPU layers",
+        {"--jit-down-quant", "--no-jit-down-quant"},
+        "deprecated: in-memory JIT down-quantization pruned for memory bandwidth optimization",
         [](common_params & params) {
             params.jit_down_quant = false;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
-    add_opt(common_arg(
-        {"--jit-down-quant-start-layer"}, "N",
-        "first layer index to down-quantize in CPU memory (-1 = first CPU layer)",
-        [](common_params & params, int value) {
-            params.jit_down_quant_start_layer = value;
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_JIT_DOWN_QUANT_START_LAYER"));
-    add_opt(common_arg(
-        {"--cpu-cache-path"}, "PATH",
-        "path to save/load transcoded CPU down-quantized layer sidecar cache",
-        [](common_params & params, const std::string & value) {
-            params.cpu_cache_path = value;
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CPU_CACHE_PATH"));
     add_opt(common_arg(
         {"--thp-align"},
         "align CPU tensor allocations to 2MB Transparent HugePages boundaries (default: true)",
@@ -4440,11 +4419,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--early-exit-thresh"}, "THRESH",
-        "probability threshold for GPU boundary early-exit token emission (e.g. 0.92, 0.0 to disable)",
-        [](common_params & params, const std::string & value) {
-            params.early_exit_thresh = std::stof(value);
+        "deprecated: boundary early-exit pruned to preserve mathematical reasoning accuracy",
+        [](common_params & params, const std::string & /*value*/) {
+            params.early_exit_thresh = 0.0f;
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_EARLY_EXIT_THRESH"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-pipe"},
         "enable pipelined double-buffered speculative execution (pre-drafts tree K+1 while verifying K)",
@@ -4460,16 +4439,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-tree-adaptive"},
-        "enable adaptive spec-tree PID controller (dynamically modulates depth [1,7] and p_split [0.05,0.40])",
-        [](common_params & params) {
-            params.spec_tree_adaptive = true;
-            params.spec_tree = true;
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TREE_ADAPTIVE"));
-    add_opt(common_arg(
-        {"--no-spec-tree-adaptive"},
-        "disable adaptive spec-tree PID controller",
+        {"--spec-tree-adaptive", "--no-spec-tree-adaptive"},
+        "deprecated: adaptive PID controller pruned in favor of deterministic static speculative trees",
         [](common_params & params) {
             params.spec_tree_adaptive = false;
         }
@@ -4589,21 +4560,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
 
-    // Phase 13 & 14 Frontier Techniques (Techniques #43 - #52)
+    // Phase 13 & 14 Frontier Techniques (Techniques #41 - #48)
     add_opt(common_arg(
-        {"--uvm-zero-copy"},
-        "enable Phase 13 Unified Zero-Copy Memory & UVM Prefetching (cudaMemAdviseSetAccessedBy) (default: enabled)",
-        [](common_params & params) {
-            params.uvm_zero_copy = true;
-            setenv("SANDWICH_UVM_ZERO_COPY", "1", 1);
-        }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_UVM_ZERO_COPY"));
-    add_opt(common_arg(
-        {"--no-uvm-zero-copy"},
-        "disable Unified Zero-Copy Memory and UVM prefetching",
+        {"--uvm-zero-copy", "--no-uvm-zero-copy"},
+        "deprecated: UVM prefetching pruned in favor of deterministic pinned host DMA (Technique #6)",
         [](common_params & params) {
             params.uvm_zero_copy = false;
-            setenv("SANDWICH_UVM_ZERO_COPY", "0", 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
@@ -4632,29 +4594,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_RADIX_CACHE_TOKENS"));
     add_opt(common_arg(
         {"--entropy-pruning", "--moe-mass-thresh"}, "F",
-        "Phase 14 Dynamic MoE Softmax Entropy Pruning cumulative mass threshold tau in (0.0, 1.0] (default: 0.96)",
-        [](common_params & params, const std::string & value) {
-            float val = std::stof(value);
-            if (val <= 0.0f || val > 1.0f) {
-                throw std::invalid_argument("moe-mass-thresh must be in (0.0, 1.0]");
-            }
-            params.moe_mass_thresh = val;
+        "deprecated: MoE entropy pruning pruned to prevent reasoning degradation",
+        [](common_params & /*params*/, const std::string & /*value*/) {
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MOE_MASS_THRESH"));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--moe-gds"},
-        "enable Phase 14 GPUDirect Storage (libcufile) NVMe-to-VRAM direct bypass for cold experts",
-        [](common_params & params) {
-            params.moe_gds = true;
-            setenv("GGML_CUDA_GDS", "1", 1);
-        }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_MOE_GDS"));
-    add_opt(common_arg(
-        {"--no-moe-gds"},
-        "disable GPUDirect Storage (revert to io_uring / host buffer staging)",
+        {"--moe-gds", "--no-moe-gds"},
+        "deprecated: GPUDirect Storage pruned on consumer laptops (lacks PCIe P2P root switch)",
         [](common_params & params) {
             params.moe_gds = false;
-            setenv("GGML_CUDA_GDS", "0", 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(

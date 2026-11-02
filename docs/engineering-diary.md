@@ -4,6 +4,8 @@
 
 ---
 
+---
+
 ## 1. Hardware-Aware Auto-Dispatcher (`--sandwich-auto`)
 * **Commit Range:** `2b550c5d1` $\rightarrow$ `c00d77d7b`
   * `2b550c5d1` (2026-10-11): Initial prototype auto-dispatch heuristics and null-safe guards.
@@ -327,22 +329,8 @@
 
 ---
 
-## 25. [P1] In-Memory JIT CPU Layer Down-Quantization (Technique #25)
+## 25. [P2] 2MB Transparent HugePages (THP) Buffer Alignment (Technique #25)
 * **Phase & Architecture:** Phase 8 Dense Wing Overhaul (Technique #25)
-  * Implemented in `src/llama-model-loader.h`, `src/llama-model-loader.cpp`, `src/llama-model.cpp`, and `common/arg.cpp`.
-* **What it does:** Resolves the DDR5 memory bandwidth bottleneck on dense hybrid models (such as Qwen 27B and Gemma 31B) by dynamically transcoding CPU-offloaded repeating layer 2D weight matrices from source quantizations (`UD-IQ3_XXS`, `Q4_K_M`) into `GGML_TYPE_Q2_K` in-memory during mmap loading, without modifying on-disk GGUF files.
-* **How it works:**
-  * In `llama_model_loader::load_all_data`, identifies the GPU/CPU boundary determined by `--sandwich-auto` / Technique #23.
-  * GPU layers (0..$L_{\text{gpu}}$) remain in VRAM untouched in their original quantization.
-  * For CPU-offloaded layers ($L_{\text{gpu}}+1 \dots L_{\text{total}}$), allocates host memory for `GGML_TYPE_Q2_K`.
-  * Parallelizes a fast JIT SIMD down-quantization pass across Raptor Lake physical P-cores using OpenMP (`#pragma omp parallel for`) and thread affinity from Technique #13.
-  * **Sidecar Arena Caching:** Caches the transcoded CPU arena into a persistent sidecar file (`<model>.sandwich-cpu.bin`), enabling subsequent warm reloads in `<150 ms` (booting Qwen 27B in just 10.4s vs. 1m 27s).
-  * **Key numbers:** Cuts DDR5 memory streaming per forward pass from ~9.0 GB down to 4.6 GB (a 48% bandwidth reduction), rocketing Qwen 27B generation speed from **1.22 t/s ➔ 5.0 – 5.6 t/s** (a **4.1x – 4.59x throughput surge**).
-
----
-
-## 26. [P2] 2MB Transparent HugePages (THP) Buffer Alignment (Technique #26)
-* **Phase & Architecture:** Phase 8 Dense Wing Overhaul (Technique #26)
   * Implemented in `ggml/src/ggml.c` (`ggml_aligned_malloc` and `ggml_aligned_free`) and `src/llama-mmap.cpp`.
 * **What it does:** Eliminates Translation Lookaside Buffer (TLB) cache thrashing when streaming 15–20 GB of weight data over DDR5 memory during hybrid CPU forward passes.
 * **How it works:**
@@ -352,8 +340,8 @@
 
 ---
 
-## 27. [P3] VRAM-Pinned Drafter & Spec-Tree Amortization (Technique #27)
-* **Phase & Architecture:** Phase 8 Dense Wing Overhaul (Technique #27)
+## 26. [P3] VRAM-Pinned Drafter & Spec-Tree Amortization (Technique #26)
+* **Phase & Architecture:** Phase 8 Dense Wing Overhaul (Technique #26)
   * Implemented in `common/common.cpp` (`sandwich_auto_dispatch`), `common/arg.cpp`, and `common/spec-tree.cpp`.
 * **What it does:** Guarantees that speculative drafters (such as `Qwen 27B DFlash2` and `Llama 3.2 1B`) do not steal host DDR5 memory bandwidth from the target model, while amortizing CPU target verification over batched candidate trees.
 * **How it works:**
@@ -364,20 +352,8 @@
 
 ---
 
-## 28. [P4] Boundary Early-Exit / Dynamic LayerSkip (Technique #28)
-* **Phase & Architecture:** Phase 8 Dense Wing Overhaul (Technique #28)
-  * Implemented in `tools/server/server-context.cpp`, `examples/speculative-simple/speculative-simple.cpp`, `common/common.h`, and `common/arg.cpp`.
-* **What it does:** Allows 40%+ of generated tokens (syntax, punctuation, common formatting, predictable completions) to bypass the remaining 34 CPU layers entirely, emitting tokens directly from VRAM at 40+ t/s.
-* **How it works:**
-  * At the GPU/CPU boundary layer ($L_{\text{gpu}}$), evaluates the intermediate hidden representation and checks top-1 prediction confidence / entropy margin.
-  * When top-1 probability exceeds the configured threshold (`--early-exit-thresh`, default `0.92`), the CPU execution pipeline is bypassed: the token is emitted immediately from GPU VRAM.
-  * Drops down to full hybrid CPU forward passes and tree verification only when semantic complexity or entropy requires deeper contextual reasoning.
-  * Dramatically lifts effective generation throughput across mixed natural language, JSON, and code generation workloads.
-
----
-
-## 29. Predictive Hardware-Aware Topology Solver & TurboQuant Auto-Router (Technique #29)
-* **Phase & Architecture:** Phase 9 Automated System Intelligence (Technique #29)
+## 27. Predictive Hardware-Aware Topology Solver & TurboQuant Auto-Router (Technique #27)
+* **Phase & Architecture:** Phase 9 Automated System Intelligence (Technique #27)
   * Implemented in `common/common.cpp` (`sandwich_auto_dispatch`), `common/common.h`, `common/arg.cpp`, and `examples/speculative/speculative.cpp`.
 * **What it does:** Dynamically inspects system hardware constraints (GPU VRAM ceiling, host DDR5 capacity) and model topology ($L_{\text{total}}$, $H_{\text{kv}}$, $D_{\text{head}}$, context length $L_{\text{ctx}}$) to automatically solve the optimal execution topology (**Asymmetric Split** vs. **Hybrid Offload**) and dynamically auto-route TurboQuant KV cache types (`turbo4`, `turbo3`, `turbo2`) for mathematical zero OOM crashes.
 * **How it works:**
@@ -397,8 +373,8 @@
 
 ---
 
-## 30. [P1] Pipelined Double-Buffered Speculative Execution (Technique #30)
-* **Phase & Architecture:** Phase 10 Pipeline Overhaul (Technique #30)
+## 28. [P1] Pipelined Double-Buffered Speculative Execution (Technique #28)
+* **Phase & Architecture:** Phase 10 Pipeline Overhaul (Technique #28)
   * Implemented in `examples/speculative-simple/speculative-simple.cpp`, `common/common.h`, `common/common.cpp`, and `common/arg.cpp`.
 * **What it does:** Eliminates the sequential idle bubble where the CPU sits idle while the GPU drafts candidate tokens, and the GPU sits idle while the CPU verifies the candidate tree.
 * **How it works:**
@@ -410,21 +386,8 @@
 
 ---
 
-## 31. [P2] Adaptive Spec-Tree PID Controller (Technique #31)
-* **Phase & Architecture:** Phase 10 Speculative Decoding Optimization (Technique #31)
-  * Implemented in `common/spec-tree.cpp`, `common/common.h`, and `common/arg.cpp`.
-* **What it does:** Replaces static tree parameters with an automated feedback controller that dynamically expands speculative depth on predictable tokens and contracts width during high-entropy reasoning phases.
-* **How it works:**
-  * Implements an exponentially weighted acceptance rate tracker over a sliding 16-token window: $\alpha_{\text{rolling}}(t) = 0.875 \cdot \alpha_{\text{rolling}}(t-1) + 0.125 \cdot \alpha_{\text{step}}$.
-  * Computes PID error $e(t) = \alpha_{\text{target}} - \alpha_{\text{rolling}}(t)$ with setpoint $\alpha_{\text{target}} = 0.75$.
-  * Dynamically modulates speculative tree depth $D(t) \in [1, 7]$: during low-entropy runs (code syntax, boilerplate, predictable grammar), depth automatically expands up to 7, allowing draft streaks up to 6–7 tokens per pass.
-  * Dynamically modulates branching threshold $p_{\text{split}}(t) \in [0.05, 0.40]$: when semantic entropy spikes, branch width contracts, avoiding wasted CPU verification compute.
-  * Increases average accepted tokens per pass from 1.88 up to 3.2–3.8 tokens/pass.
-
----
-
-## 32. [P3] Asymmetric Split-KV Engine: Pure VRAM KV Cache on CPU Models (Technique #32)
-* **Phase & Architecture:** Phase 11 Hardware Push (Technique #32)
+## 29. [P3] Asymmetric Split-KV Engine: Pure VRAM KV Cache on CPU Models (Technique #29)
+* **Phase & Architecture:** Phase 11 Hardware Push (Technique #29)
   * Implemented in `src/llama-context.cpp`, `include/llama.h`, `common/common.cpp`, and `common/arg.cpp`.
 * **What it does:** Solves memory bus saturation at 32K–64K context on 100% CPU-offloaded 70B models (`n_gpu_layers = 0`) by forcing KV cache residency into RTX 5050 Mobile GDDR6 VRAM.
 * **How it works:**
@@ -434,8 +397,8 @@
 
 ---
 
-## 33. [P4] AVX2-VNNI P-Core Vector Execution for Q2_K & IQ2_XXS (Technique #33)
-* **Phase & Architecture:** Phase 11 Hardware Acceleration (Technique #33)
+## 30. [P4] AVX2-VNNI P-Core Vector Execution for Q2_K & IQ2_XXS (Technique #30)
+* **Phase & Architecture:** Phase 11 Hardware Acceleration (Technique #30)
   * Implemented in `ggml/src/ggml-cpu/quants.c` and `ggml/src/ggml-cpu/ggml-cpu.c`.
 * **What it does:** Quadruples 2-bit quantized matrix-vector multiplication throughput on Intel Raptor Lake P-cores (i7-13620H) by leveraging native AVX-VNNI instructions.
 * **How it works:**
@@ -445,8 +408,8 @@
 
 ---
 
-## 34. [P5] One-Click Agent Server Preset (Technique #34)
-* **Phase & Architecture:** Phase 11 Server Optimization (Technique #34)
+## 31. [P5] One-Click Agent Server Preset (Technique #31)
+* **Phase & Architecture:** Phase 11 Server Optimization (Technique #31)
   * Implemented in `common/arg.cpp` and `common/common.cpp`.
 * **What it does:** Provides a unified configuration preset (`--preset agent`) tailored specifically for long-running autonomous coding agents, multi-turn tool calling, and high-concurrency workflows.
 * **How it works:**
@@ -456,8 +419,8 @@
 
 ---
 
-## 35. [P6] Blackwell Native FP4 / MXFP4 Tensor Offload (Technique #35)
-* **Phase & Architecture:** Phase 11 Next-Gen Architecture (Technique #35)
+## 32. [P6] Blackwell Native FP4 / MXFP4 Tensor Offload (Technique #32)
+* **Phase & Architecture:** Phase 11 Next-Gen Architecture (Technique #32)
   * Implemented in `ggml/include/ggml.h`, `ggml/src/ggml.c`, and `ggml/src/ggml-cuda/`.
 * **What it does:** Unlocks hardware-native NVFP4 (`GGML_TYPE_FP4_0`) and microscopic-scaled MXFP4 (`GGML_TYPE_MXFP4_0`) offloading on NVIDIA GeForce RTX 5050 Mobile Blackwell `sm_120` architecture.
 * **How it works:**
@@ -466,7 +429,7 @@
 
 ---
 
-## 36. Quantized-Native CUDA FlashAttention (Technique #36)
+## 33. Quantized-Native CUDA FlashAttention (Technique #33)
 * **Phase & Architecture:** Phase 12 External Kernel Integration (from Piggidragon)
   * Integrated into `ggml/src/ggml-cuda/` (`fattn-mma-quant*`), `ggml/src/ggml-cuda/fattn.cu`, `ggml/src/ggml-cuda/fattn-mma-f16.cuh`, `src/llama-graph.cpp`, and `common/arg.cpp`.
 * **What it does:** Fuses quantized KV cache dequantization directly inside the MMA Tensor Core loop for `Q4_0`, `Q8_0`, and PolarQuant formats, completely eliminating intermediate uncompressed FP16 activation buffers in VRAM.
@@ -478,7 +441,7 @@
 
 ---
 
-## 37. GPU Top-K Logits Reduction (Technique #37)
+## 34. GPU Top-K Logits Reduction (Technique #34)
 * **Phase & Architecture:** Phase 12 External Kernel Integration
   * Implemented in `include/llama.h`, `src/llama-context.h`, `src/llama-context.cpp`, `common/arg.cpp`, and `examples/speculative-simple/speculative-simple.cpp`.
 * **What it does:** Solves PCIe transfer latency bottlenecks during speculative decoding by performing top-K reduction directly on GPU VRAM before transferring logits to host CPU memory.
@@ -490,7 +453,7 @@
 
 ---
 
-## 38. Fused TurboQuant MMA Tensor Core FlashAttention (Technique #38)
+## 35. Fused TurboQuant MMA Tensor Core FlashAttention (Technique #35)
 * **Phase & Architecture:** Phase 12 External Kernel Integration (from Thecodacus + TurboQuant)
   * Implemented in `ggml/src/ggml-cuda/fattn-mma-turbo.cuh`, `ggml/src/ggml-cuda/fattn-mma-f16.cuh`, and `common/arg.cpp`.
 * **What it does:** Directly feeds 4-bit, 3-bit, and 2-bit PolarQuant compressed KV cache tiles into Tensor Core MMA instructions without preliminary global memory dequantization.
@@ -502,7 +465,7 @@
 
 ---
 
-## 39. Asynchronous CPU Split Worker Overlap (Technique #39)
+## 36. Asynchronous CPU Split Worker Overlap (Technique #36)
 * **Phase & Architecture:** Phase 12 Pipeline Acceleration
   * Implemented in `common/common.cpp`, `common/arg.cpp`, and `src/llama-context.cpp`.
 * **What it does:** Overlaps CPU graph partitions with GPU computation by dispatching host CPU subgraphs to an asynchronous worker thread pool.
@@ -514,8 +477,8 @@
 
 ---
 
-## 40. 3-Tier Hierarchical MoE Memory System Engine (Technique #40)
-* **Phase & Architecture:** Phase 12 Core Architecture (Technique #40)
+## 37. 3-Tier Hierarchical MoE Memory System Engine (Technique #37)
+* **Phase & Architecture:** Phase 12 Core Architecture (Technique #37)
   * Implemented in `src/llama-moe-cache.h`, `src/llama-moe-cache.cpp`, `src/llama-model.h`, `src/llama-model.cpp`, `src/llama-mmap.h`, `src/llama-mmap.cpp`, `src/CMakeLists.txt`, `common/common.h`, `common/common.cpp`, and `common/arg.cpp`.
 * **What it does:** Transforms `sandwich-cpp`'s MoE cache from a 2-tier into a 3-tier hierarchical memory engine (Tier 1 HOT VRAM @ 288 GB/s -> Tier 2 WARM DDR5 @ 50 GB/s -> Tier 3 COLD NVMe @ 7 GB/s), unlocking massive MoE models (DeepSeek-V2/V3, Mixtral 8x22B, GPT-OSS-120B) on 8GB VRAM / 24GB DDR5 hardware.
 * **How it works:**
@@ -527,8 +490,8 @@
 
 ---
 
-## 41. 2Q & Ghost-Cache Replacement Policy (Technique #41)
-* **Phase & Architecture:** Phase 12 Cache Intelligence (Technique #41)
+## 38. 2Q & Ghost-Cache Replacement Policy (Technique #38)
+* **Phase & Architecture:** Phase 12 Cache Intelligence (Technique #38)
   * **Commit Range:** `969b6a7c5` (2026-10-25)
   * Implemented in `src/llama-moe-cache-share.h`, `src/llama-moe-cache.h`, `src/llama-moe-cache.cpp`, `include/llama.h`, `src/llama-cparams.h`, `src/llama-context.cpp`, `common/common.h`, `common/common.cpp`, `common/arg.cpp`, and `tests/test-moe-cache-shares.cpp`.
 * **What it does:** Replaces the naive single-queue LRU in the MoE caching subsystem with a 2Q (Two-Queue) + Ghost-Cache architecture to eliminate cache pollution from one-hit wonder transient tokens, dramatically improving VRAM hit rates on massive MoE architectures.
@@ -543,7 +506,7 @@
 
 ---
 
-### Technique #42: Asymmetric Split-KV & CPU Weight Pinning for Dense Models (70% RAM Rule)
+## 39. Asymmetric Split-KV & CPU Weight Pinning for Dense Models (70% RAM Rule) (Technique #39)
 
 * **Physical Bottleneck Identified:**
   * When executing high-parameter dense transformer models (e.g. Command R 35B, Bonsai 27B, Llama-3.3-70B) on memory-constrained consumer workstations (8 GB VRAM), standard hybrid offload splits layers across GPU and CPU (e.g., 14 layers in VRAM, 26 layers in DDR5 RAM).
@@ -563,21 +526,8 @@
 
 ---
 
-## 43. Unified Zero-Copy Memory & UVM Prefetching (Technique #43)
-* **Phase & Architecture:** Phase 13 Unified Memory & Coherent Bus Architecture (Technique #43)
-  * Implemented in `ggml/src/ggml-cuda/ggml-cuda.cu` (`ggml_backend_cuda_register_host_buffer`) and `src/llama-mmap.cpp`.
-* **What it does:** Eliminates intermediate CPU-to-GPU staging copy buffers by directly registering host DDR5 mmap regions into the CUDA virtual address space (`cudaHostRegisterPortable | cudaHostRegisterReadOnly`) and advising the CUDA MMU driver with `cudaMemAdviseSetAccessedBy`.
-* **How it works:**
-  * In standard hybrid offload, transferring activations or cold expert weights requires allocating pageable host memory, invoking `memcpy` to pinned staging memory, and issuing `cudaMemcpyAsync`.
-  * Technique #43 advises the NVIDIA driver via `cudaMemAdvise(buffer, size, cudaMemAdviseSetAccessedBy, loc)` where `loc.type = cudaMemLocationTypeDevice` and `loc.id = device`.
-  * On modern architectures with Compute Capability $\ge 8.0$ (Ampere, Ada, and Blackwell CC 12.0), this enables the GPU Memory Management Unit (MMU) to directly populate GPU virtual page table entries pointing to host physical RAM pages over PCIe Resizable BAR.
-  * Result: GPU Tensor Cores can read directly from host DDR5 over PCIe without CPU intermediate buffer allocations, cutting PCIe transfer latency and eliminating memory churn.
-* **Controlled via:** Enabled by default under `--sandwich-auto` and `SANDWICH_UVM_ZERO_COPY=1`; can be bypassed with `GGML_CUDA_NO_REGISTER_HOST=1`.
-
----
-
-## 44. Needle-In-A-Haystack (NIAH) Long-Context Semantic Fidelity Verification (Technique #44)
-* **Phase & Architecture:** Phase 13 Empirical Long-Context Verification (Technique #44)
+## 40. Needle-In-A-Haystack (NIAH) Long-Context Semantic Fidelity Verification (Technique #40)
+* **Phase & Architecture:** Phase 13 Empirical Long-Context Verification (Technique #40)
   * Implemented in `tests/test_niah_retrieval.py` and empirical harness.
 * **What it does:** Mathematically and empirically verifies that TurboQuant polar Lloyd-Max compression (`turbo4`, `turbo3`, `turbo2`) preserves exact semantic retrieval fidelity across context windows from 8k up to 128k tokens, proving that aggressive quantization does not cause catastrophic forgetting or token degradation.
 * **How it works:**
@@ -589,8 +539,8 @@
 
 ---
 
-## 45. Radix-Tree Persistent Prefix Caching / RadixAttention (Technique #45)
-* **Phase & Architecture:** Phase 13 Agentic Inference & Multi-Turn Acceleration (Technique #45)
+## 41. Radix-Tree Persistent Prefix Caching / RadixAttention (Technique #41)
+* **Phase & Architecture:** Phase 13 Agentic Inference & Multi-Turn Acceleration (Technique #41)
   * Implemented in `common/radix-cache.h` and verified in `tests/test-radix-cache.cpp`.
 * **What it does:** Organizes past prompt token sequences into a dynamic prefix tree (Radix Tree / Trie), enabling sub-millisecond reuse of KV cache states for common conversation prefixes, system prompts, tool declarations, and multi-turn agent interactions without recomputing attention.
 * **How it works:**
@@ -603,8 +553,8 @@
 
 ---
 
-## 46. Cross-Platform Unified Hardware Architecture (Metal & ROCm HIP) (Technique #46)
-* **Phase & Architecture:** Phase 13 Cross-Platform Ecosystem Expansion (Technique #46)
+## 42. Cross-Platform Unified Hardware Architecture (Metal & ROCm HIP) (Technique #42)
+* **Phase & Architecture:** Phase 13 Cross-Platform Ecosystem Expansion (Technique #42)
   * Implemented across Metal Shading Language (`ggml-metal.metal`) and ROCm HIP architecture (`ggml-cuda/vendors/hip.h`).
 * **What it does:** Extends TurboQuant polar Lloyd-Max compression, Asymmetric Split-KV, and Walsh-Hadamard pre-rotation to Apple Silicon Unified Memory (M-Series MacBooks) and AMD ROCm/HIP (Radeon RX 7000 & Strix Halo APUs).
 * **How it works:**
@@ -618,41 +568,8 @@
 
 ---
 
-## 47. Dynamic MoE Softmax Entropy Pruning (Top-K Weight Mass Throttling) (Technique #47)
-* **Phase & Architecture:** Phase 14 Advanced MoE & Sparsity Intelligence (Technique #47)
-* **The Physical Bottleneck:**
-  * In standard Mixture-of-Experts inference (e.g. Qwen 35B top-4 routing, DeepSeek top-8 routing), engines unconditionally compute all $K$ routed experts for every single token.
-  * In practice, the router softmax distribution is heavily skewed: for over 45% of tokens, Expert #1 receives 88% probability mass, Expert #2 receives 10%, and Experts #3 and #4 receive $< 1\%$ combined.
-  * Fetching, streaming, and evaluating cold experts that contribute virtually 0.0% to the output token activation wastes DDR5 memory bandwidth and induces PCIe bus bubbles.
-* **The Secret Sauce:**
-  * **Cumulative Mass Thresholding ($\tau_{\text{mass}} = 0.96$):** At runtime, sort the router gating probabilities in descending order. If the top $M < K$ experts capture $\ge 96\%$ of the cumulative probability mass:
-    $$\sum_{i=1}^{M} P_{(i)} \ge \tau_{\text{mass}}$$
-    the engine dynamically drops the remaining $K - M$ low-probability experts for that token.
-  * On typical conversational and code generation workloads, $> 45\%$ of tokens evaluate only 1 or 2 experts instead of 4 or 8.
-* **The Hardware Impact:**
-  * Slashes cold expert transfers over PCIe/DDR5 by up to 40%.
-  * Zero measurable perplexity or coding accuracy drop ($\Delta\text{PPL} < 0.008$).
-* **Controlled via:** `--moe-mass-thresh <float>` (default: `0.96`; disable with `1.0`).
-
----
-
-## 48. GPUDirect Storage (GDS / libcufile) NVMe-to-VRAM Bypass (Technique #48)
-* **Phase & Architecture:** Phase 14 Direct Storage DMA Architecture (Technique #48)
-* **The Physical Bottleneck:**
-  * In Tier 3 cold expert fetching (Technique #40), weights travel from NVMe SSD $\rightarrow$ Linux kernel page cache $\rightarrow$ Host DDR5 RAM $\rightarrow$ GPU VRAM via PCIe DMA.
-  * This induces a two-hop memory path that consumes host DDR5 memory bandwidth and competes directly with the CPU target's matrix operations.
-* **The Secret Sauce:**
-  * Integrates NVIDIA GPUDirect Storage (`libcufile`) to map the NVMe PCIe BAR directly into CUDA device pointers via `cuFileRead`.
-  * Cold expert weight blocks stream directly from the PCIe 4.0 NVMe SSD over the PCIe bus straight into the RTX 5050 GDDR6 VRAM slab, completely bypassing host system DDR5 RAM and OS kernel page caches.
-* **The Hardware Impact:**
-  * Reduces host DDR5 memory bus contention to 0 MB/s during cold expert fetches.
-  * Streams cold weights at line-rate NVMe bus speed (~7,000 MB/s) with sub-3ms latency directly into GPU VRAM.
-* **Controlled via:** `--moe-gds` (enable GPUDirect Storage) and `--no-moe-gds`.
-
----
-
-## 49. Zero-Memory Native MTP (Multi-Token Prediction) Speculative Rollout (Technique #49)
-* **Phase & Architecture:** Phase 14 Native Speculative Decoding (Technique #49)
+## 43. Zero-Memory Native MTP (Multi-Token Prediction) Speculative Rollout (Technique #43)
+* **Phase & Architecture:** Phase 14 Native Speculative Decoding (Technique #43)
 * **The Physical Bottleneck:**
   * Standard speculative decoding requires loading a secondary GGUF draft model (e.g. 1B–3B parameters) into memory, taking 1.5–3.5 GB of precious VRAM that could otherwise hold hot MoE experts or a 64k KV cache.
 * **The Secret Sauce:**
@@ -667,8 +584,8 @@
 
 ---
 
-## 50. Asymmetric KV Outlier Channelling (K-Polar4 / V-Log2 Extreme Squeeze) (Technique #50)
-* **Phase & Architecture:** Phase 14 Asymmetric Quantization Physics (Technique #50)
+## 44. Asymmetric KV Outlier Channelling (K-Polar4 / V-Log2 Extreme Squeeze) (Technique #44)
+* **Phase & Architecture:** Phase 14 Asymmetric Quantization Physics (Technique #44)
 * **The Physical Bottleneck:**
   * Key ($K$) and Value ($V$) tensors have fundamentally different mathematical properties:
     - **Keys:** Contain high-magnitude outlier directional channels that dictate RoPE positional geometry and attention dot-product angles; highly sensitive to quantization error.
@@ -686,8 +603,8 @@
 
 ---
 
-## 51. Chunked Context Prefill & Ping-Pong Activation Staging (Technique #51)
-* **Phase & Architecture:** Phase 14 Memory-Bounded Prefill Engine (Technique #51)
+## 45. Chunked Context Prefill & Ping-Pong Activation Staging (Technique #45)
+* **Phase & Architecture:** Phase 14 Memory-Bounded Prefill Engine (Technique #45)
 * **The Physical Bottleneck:**
   * Ingesting massive prompts (e.g., 32k to 128k codebase ingestion) causes catastrophic transient VRAM memory spikes because intermediate attention activation matrices scale with sequence length, causing premature CUDA OOM before token generation even begins.
 * **The Secret Sauce:**
@@ -700,8 +617,8 @@
 
 ---
 
-## 52. Latent FlashMLA Direct Tensor Core MMA (Un-expanded Projection) (Technique #52)
-* **Phase & Architecture:** Phase 14 Compressed Manifold Tensor Kernels (Technique #52)
+## 46. Latent FlashMLA Direct Tensor Core MMA (Un-expanded Projection) (Technique #46)
+* **Phase & Architecture:** Phase 14 Compressed Manifold Tensor Kernels (Technique #46)
 * **The Physical Bottleneck:**
   * DeepSeek architectures employ Multi-Head Latent Attention (MLA) with low-rank compressed KV projections ($d_c = 512$).
   * Standard implementations uncompress the latent vector back into 128 separate multi-head tensors in memory before calling FlashAttention, expanding memory footprint and bandwidth consumption by $8\times$.
@@ -715,7 +632,7 @@
 
 ---
 
-## 53. Dynamic Multi-Drafter Arbitration & Bayesian Shadow Learning (`--spec-select`) (Technique #53)
+## 47. Dynamic Multi-Drafter Arbitration & Bayesian Shadow Learning (`--spec-select`) (Technique #47)
 * **Origin & Attribution:** Ported from [`Piggidragon/llama.cpp`](https://github.com/Piggidragon/llama.cpp) (PR #47 / PR #48, inspired by Strata by @Niko1221).
 * **The Physical Bottleneck:**
   * When using multiple speculative decoding types (e.g. `--spec-type ngram-simple,draft-mtp`), standard upstream uses a naive "first-draft-wins" rule: whichever drafter matches first is unconditionally emitted.
@@ -732,7 +649,7 @@
 
 ---
 
-## 54. Closed-Form Dual-Axis Variance Normalization (`--turboquant-varn`) (Technique #54)
+## 48. Closed-Form Dual-Axis Variance Normalization (`--turboquant-varn`) (Technique #48)
 * **Origin & Attribution:** Theoretical breakthrough inspired by KVarN (Huawei Computing Systems Lab, arXiv:2606.03458), re-engineered into a zero-latency streaming closed-form CUDA kernel for `sandwich.cpp`.
 * **The Physical Bottleneck:**
   * In long-horizon autoregressive reasoning (e.g. 10k–32k token Chain-of-Thought on DeepSeek-R1, QwQ-32B, and Qwen-2.5-Math), quantization error accumulates systematically: $S_{i,j} = \frac{\mathbf{q}_i^T \mathbf{k}_j}{\sqrt{d}} = \frac{\mathbf{q}_i^T \hat{\mathbf{k}}_j}{\sqrt{d}} \cdot \frac{\|\mathbf{k}_j\|}{\|\hat{\mathbf{k}}_j\|}$.
@@ -753,8 +670,8 @@
 
 ---
 
-## 55. Prefill Head Aliasing (`--prefill-head-alias`) (Technique #55)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #55)
+## 49. Prefill Head Aliasing (`--prefill-head-alias`) (Technique #49)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #49)
 * **The Physical Bottleneck:**
   * During prompt prefill, the final vocab projection head (`output.weight`, e.g. 1.2–2.5 GB in DeepSeek / large vocab models) sits idle in VRAM while compute is bound in early and middle transformer layers.
   * In VRAM-constrained systems (e.g. 8 GB RTX 5050 Mobile), holding this memory statically reduces the space available for activation scratchpads and KV cache blocks.
@@ -767,8 +684,8 @@
 
 ---
 
-## 56. KVA Late-Layer Recurrence State Prefill (`--kva-prefill`) (Technique #56)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #56)
+## 50. KVA Late-Layer Recurrence State Prefill (`--kva-prefill`) (Technique #50)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #50)
 * **The Physical Bottleneck:**
   * During deep multi-turn context prefill ($32\text{k}+$ tokens), evaluating full MoE feed-forward networks across all 40–60 layers consumes massive memory bandwidth and execution time.
   * In recurrent and hybrid architectures, late-layer representations are predominantly guided by compressed attention and recurrent states rather than exhaustive expert activations.
@@ -781,8 +698,8 @@
 
 ---
 
-## 57. Disjoint Peer Cache Guard (`--moe-disjoint-guard`) (Technique #57)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #57)
+## 51. Disjoint Peer Cache Guard (`--moe-disjoint-guard`) (Technique #51)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #51)
 * **The Physical Bottleneck:**
   * In multi-tier MoE caching (Tier 1 VRAM, Tier 2 WARM DDR5, Tier 3 NVMe), uncoordinated replacement policies can leave redundant copies of the same expert duplicated across both VRAM and pinned host memory.
   * On an 8 GB GPU + 24 GB RAM system, redundant caching wastes precious memory capacity and triggers thrashing.
@@ -795,8 +712,8 @@
 
 ---
 
-## 58. Batched DMA Transfers (`--dma-batch`) (Technique #58)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #58)
+## 52. Batched DMA Transfers (`--dma-batch`) (Technique #52)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #52)
 * **The Physical Bottleneck:**
   * When 5–6 experts are routed per token, issuing sequential `cudaMemcpyAsync` calls for non-contiguous expert slices incurs substantial PCIe driver submission overhead and context-switching latency.
 * **The Secret Sauce:**
@@ -808,8 +725,8 @@
 
 ---
 
-## 59. Exchange Buffer Pointer Rotation (`--moe-exchange-rot`) (Technique #59)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #59)
+## 53. Exchange Buffer Pointer Rotation (`--moe-exchange-rot`) (Technique #53)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #53)
 * **The Physical Bottleneck:**
   * Moving cold experts from SSD/host RAM into the warm cache historically required copying data between host staging buffers and cache slots.
 * **The Secret Sauce:**
@@ -821,8 +738,8 @@
 
 ---
 
-## 60. Message-Boundary Delta Caching (`--msg-cache`) (Technique #60)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #60)
+## 54. Message-Boundary Delta Caching (`--msg-cache`) (Technique #54)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #54)
 * **The Physical Bottleneck:**
   * In autonomous agent workflows, intermediate tool calls, thought tags, and user edits modify conversational history. Naive prefix caching drops the entire downstream KV cache or fails match due to mid-token edits.
 * **The Secret Sauce:**
@@ -834,8 +751,8 @@
 
 ---
 
-## 61. QSA_ROWS & EXPDEC Fused Shared-Memory Kernels (`--fused-expdec`) (Technique #61)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #61)
+## 55. QSA_ROWS & EXPDEC Fused Shared-Memory Kernels (`--fused-expdec`) (Technique #55)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #55)
 * **The Physical Bottleneck:**
   * Decoding sub-2-bit MoE representations (`IQ1_M`, `IQ2_XXS`, `GSQ_RCO`) requires unpacking nibbles, applying group scales, and computing dot products, creating intermediate register pressure.
 * **The Secret Sauce:**
@@ -846,8 +763,8 @@
 
 ---
 
-## 62. Dynamic Elastic VRAM Resizing Endpoint (`--elastic-vram`) (Technique #62)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #62)
+## 56. Dynamic Elastic VRAM Resizing Endpoint (`--elastic-vram`) (Technique #56)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #56)
 * **The Physical Bottleneck:**
   * Fixed VRAM allocations risk out-of-memory crashes when desktop compositors (e.g. Wayland / Hyprland) demand GPU memory, or leave VRAM underutilized when desktop load is low.
 * **The Secret Sauce:**
@@ -859,8 +776,8 @@
 
 ---
 
-## 63. DeepSeek V4.1 Flash Native Engram Direct NVMe I/O (`--dsv41`) (Technique #63)
-* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #63)
+## 57. DeepSeek V4.1 Flash Native Engram Direct NVMe I/O (`--dsv41`) (Technique #57)
+* **Phase & Architecture:** Phase 15 Strata Assimilation (Technique #57)
 * **The Physical Bottleneck:**
   * DeepSeek V4.1 Flash (GSQ_RCO) features 40 layers $\times$ 384 experts plus an external 111 GB Engram n-gram memory table (`DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf`). Total model size (~239 GB) cannot fit in host RAM.
 * **The Secret Sauce:**
@@ -872,8 +789,8 @@
 
 ---
 
-## 64. Dynamic YaRN Auto-Frequency Scaling (`--dynamic-yarn`) (Technique #64)
-* **Phase & Architecture:** Era 8 Dynamic Context Scaling & Attention Guards (Technique #64)
+## 58. Dynamic YaRN Auto-Frequency Scaling (`--dynamic-yarn`) (Technique #58)
+* **Phase & Architecture:** Era 8 Dynamic Context Scaling & Attention Guards (Technique #58)
 * **The Physical Bottleneck:**
   * Scaling rotary positional embeddings (RoPE) to ultra-long contexts ($128\text{k}$) previously required manually precomputing `rope_freq_scale` and `yarn_orig_ctx` for every unique model variant, leading to perplexity blowouts or out-of-bounds attention angles if configured incorrectly.
 * **The Secret Sauce:**
@@ -886,8 +803,8 @@
 
 ---
 
-## 65. Universal Attention Sink Guard (`--attn-sinks`) (Technique #65)
-* **Phase & Architecture:** Era 8 Dynamic Context Scaling & Attention Guards (Technique #65)
+## 59. Universal Attention Sink Guard (`--attn-sinks`) (Technique #59)
+* **Phase & Architecture:** Era 8 Dynamic Context Scaling & Attention Guards (Technique #59)
 * **The Physical Bottleneck:**
   * During sliding-window streaming or context shifting, evicting the very first tokens causes catastrophic attention score collapse because initial tokens absorb enormous residual Softmax denominator mass (attention sink phenomenon).
 * **The Secret Sauce:**
@@ -898,8 +815,8 @@
 
 ---
 
-## 66. Unrotated KV Staging (`--unrotated-kv`) (Technique #66)
-* **Phase & Architecture:** Era 8 Dynamic Context Scaling & Attention Guards (Technique #66)
+## 60. Unrotated KV Staging (`--unrotated-kv`) (Technique #60)
+* **Phase & Architecture:** Era 8 Dynamic Context Scaling & Attention Guards (Technique #60)
 * **The Physical Bottleneck:**
   * Shifting context in standard engines requires iterating over all KV cache cells and re-applying rotary embedding matrices to every token, incurring $O(N)$ overhead and breaking compressed/quantized KV cache blocks.
 * **The Secret Sauce:**
@@ -911,8 +828,8 @@
 
 ---
 
-## 67. Peer-to-Peer Distributed Heterogeneous VRAM Pooling (`--peer-nodes`) (Technique #67)
-* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #67)
+## 61. Peer-to-Peer Distributed Heterogeneous VRAM Pooling (`--peer-nodes`) (Technique #61)
+* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #61)
   * Implemented in `common/sandwich-peer.hpp` and verified in `tests/test-sandwich-peer.cpp`.
 * **The Physical Bottleneck:**
   * Running 70B–120B parameter models on a single consumer laptop (e.g. 8GB VRAM) requires heavy Tier 2/3 CPU RAM and NVMe offloading, which bounds throughput by PCIe/DRAM bandwidth.
@@ -925,8 +842,8 @@
 
 ---
 
-## 68. Asymmetric Heterogeneous Topology Solver (Technique #68)
-* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #68)
+## 62. Asymmetric Heterogeneous Topology Solver (Technique #62)
+* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #62)
 * **The Physical Bottleneck:**
   * Symmetric tensor parallelism requires identical hardware and uniform low-latency interconnects (NVLink/Infiniband), making it unsuitable for mixed consumer hardware.
 * **The Secret Sauce:**
@@ -937,8 +854,8 @@
 
 ---
 
-## 69. Direct Memory Access (DMA) & Zero-Copy Interconnect Transport (`--peer-dma`) (Technique #69)
-* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #69)
+## 63. Direct Memory Access (DMA) & Zero-Copy Interconnect Transport (`--peer-dma`) (Technique #63)
+* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #63)
 * **The Physical Bottleneck:**
   * Standard TCP/IP socket network streaming incurs kernel context switches, packet serialization, and memory buffer copies that bottleneck pipeline parallel inference.
 * **The Secret Sauce:**
@@ -950,8 +867,8 @@
 
 ---
 
-## 70. Distributed 2-Bit Walsh-Hadamard Polar Network Compression (`--peer-turbo-net`) (Technique #70)
-* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #70)
+## 64. Distributed 2-Bit Walsh-Hadamard Polar Network Compression (`--peer-turbo-net`) (Technique #64)
+* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #64)
 * **The Physical Bottleneck:**
   * Transmitting FP16 activation tensors between cluster nodes over 1G/2.5G/10G LAN consumes massive network bandwidth, causing pipeline stalls.
 * **The Secret Sauce:**
@@ -963,8 +880,8 @@
 
 ---
 
-## 71. Cross-Node Speculative Verification Pipeline (`--peer-spec-pipe`) (Technique #71)
-* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #71)
+## 65. Cross-Node Speculative Verification Pipeline (`--peer-spec-pipe`) (Technique #65)
+* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #65)
 * **The Physical Bottleneck:**
   * In distributed pipeline parallelism, downstream nodes remain idle while upstream nodes compute token drafts.
 * **The Secret Sauce:**
@@ -975,8 +892,8 @@
 
 ---
 
-## 72. Dynamic Zero-Crash Failover with Hot Re-partitioning (`--peer-fallback`) (Technique #72)
-* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #72)
+## 66. Dynamic Zero-Crash Failover with Hot Re-partitioning (`--peer-fallback`) (Technique #66)
+* **Phase & Architecture:** Era 9 Peer Clustering & Distributed Polar Mesh (Technique #66)
 * **The Physical Bottleneck:**
   * Consumer peer connections (Wi-Fi drop, laptop sleep, cable unplug) are unreliable. In traditional distributed systems, any node drop crashes the inference engine.
 * **The Secret Sauce:**
@@ -984,6 +901,3 @@
 * **The Hardware Impact:**
   * 100% resilient distributed mesh inference.
 * **Controlled via:** `--peer-fallback`. Default: enabled.
-
-
-

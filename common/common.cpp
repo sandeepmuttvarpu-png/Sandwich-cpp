@@ -1864,12 +1864,7 @@ void sandwich_auto_dispatch(common_params & params) {
 
         LOG_INF("   -> Phase 5: Pinned Host Memory & Early-Lookahead Router (Zero-Copy PCIe DMA)\n");
         LOG_INF("   -> Phase 6: Asymmetric Mixed-Precision Quantization (Sub-4-bit IQK Experts / High-Precision Backbone)\n");
-        if (params.moe_mass_thresh > 0.0f && params.moe_mass_thresh < 1.0f) {
-            LOG_INF("   -> [Technique #47] Dynamic MoE Softmax Entropy Pruning ACTIVE (mass threshold tau=%.2f, drops low-mass cold experts)\n", params.moe_mass_thresh);
-        }
-        if (params.moe_gds) {
-            LOG_INF("   -> [Technique #48] GPUDirect Storage (libcufile) ACTIVE (--moe-gds, line-rate NVMe-to-VRAM DMA)\n");
-        }
+
         LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD + Lookahead)\n");
         LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
         LOG_INF("   -> Persistent Prompt Prefix Caching: 4 GiB Host RAM buffer & slot common-prefix matching active\n");
@@ -2050,10 +2045,9 @@ void sandwich_auto_dispatch(common_params & params) {
                 LOG_INF("                    Target 100%% on CPU eliminates handoff bubbles, frees VRAM for 100%% drafter offload (180+ t/s),\n");
                 LOG_INF("                    and amortizes DDR5 weight reads via batched GEMM Spec-Tree verification targeting 2.5-3.2 t/s.\n");
             } else {
-                LOG_INF("   Prediction:      HYBRID OFFLOAD (Technique #25-#28: VRAM Attention/MLP + CPU Q2_K Tail)\n");
-                LOG_INF("   Rationale:       %.1f%% layer offload computes high-throughput attention & MLP on RTX 5050 (192 GB/s),\n",
+                LOG_INF("   Prediction:      HYBRID OFFLOAD (VRAM Attention/MLP + CPU Tail)\n");
+                LOG_INF("   Rationale:       %.1f%% layer offload computes high-throughput attention & MLP on RTX 5050 (192 GB/s).\n",
                         offload_ratio * 100.0f);
-                LOG_INF("                    while Phase 8 JIT down-quant to Q2_K cuts DDR5 streaming by 50%%.\n");
             }
             LOG_INF("   ----------------------------------------------------\n");
             LOG_INF("   [TurboQuant Predictive Auto-Router (OOM Immunity)]\n");
@@ -2074,19 +2068,14 @@ void sandwich_auto_dispatch(common_params & params) {
                     ggml_type_name(target_kv_type), ggml_type_name(target_kv_type));
             LOG_INF("   -> KV Cache Draft:  GPU VRAM Offloaded (k=turbo4, v=turbo4)\n");
             LOG_INF("   -> Tree Decoding:   ACTIVE (depth=3, width=2, p_split=0.15)\n");
-            LOG_INF("   -> In-Memory JIT:   ACTIVE (target: Q2_K, DDR5 9GB -> 4.8GB per pass)\n");
-            LOG_INF("   -> 2MB THP Align:   ACTIVE (madvise MADV_HUGEPAGE)\n");
-            if (!predict_asymmetric_split) {
-                LOG_INF("   -> Boundary Skip:   ACTIVE (early_exit_thresh = 0.92)\n");
-            }
-            LOG_INF("   -> [P1] Spec Pipe:  ACTIVE (Technique #30: Double-buffered asynchronous GPU timeline)\n");
-            LOG_INF("   -> [P2] Adapt PID:  ACTIVE (Technique #31: Dynamic depth [1,7] & p_split [0.05,0.40])\n");
+            LOG_INF("   -> 2MB THP Align:   ACTIVE (madvise MADV_HUGEPAGE, Technique #25)\n");
+            LOG_INF("   -> [P1] Spec Pipe:  ACTIVE (Technique #28: Double-buffered asynchronous GPU timeline)\n");
             if (predict_asymmetric_split) {
-                LOG_INF("   -> [P3] Split-KV:   ACTIVE (Technique #32: Pure VRAM KV cache, 0 bytes KV over DDR5)\n");
+                LOG_INF("   -> [P3] Split-KV:   ACTIVE (Technique #29: Pure VRAM KV cache, 0 bytes KV over DDR5)\n");
             }
-            LOG_INF("   -> [P4] AVX2-VNNI:  ACTIVE (Technique #33: Single-cycle _mm256_dpbusd_epi32 on P-cores 0-5)\n");
+            LOG_INF("   -> [P4] AVX2-VNNI:  ACTIVE (Technique #30: Single-cycle _mm256_dpbusd_epi32 on P-cores 0-5)\n");
             if (is_blackwell) {
-                LOG_INF("   -> [P6] Blackwell:  ACTIVE (Technique #35: CC 12.0 NVFP4 / MXFP4 Tensor Cores)\n");
+                LOG_INF("   -> [P6] Blackwell:  ACTIVE (Technique #32: CC 12.0 NVFP4 / MXFP4 Tensor Cores)\n");
             }
 
             params.n_gpu_layers          = target_gpu_layers;
@@ -2217,66 +2206,60 @@ void sandwich_auto_dispatch(common_params & params) {
         }
     }
 
-    // [Techniques #30 - #39 Synthesis] Hardware-Aware Pipeline Engagement
+    // [Techniques #28 - #36 Synthesis] Hardware-Aware Pipeline Engagement
     if (params.split_kv || (!is_moe && params.n_gpu_layers == 0)) {
         params.split_kv = true;
         params.no_kv_offload = false;
         params.spec_pipe = true;
-        params.spec_tree_adaptive = true;
         if (params.logits_topk <= 0) {
             params.logits_topk = 64;
         }
-        LOG_INF("   -> [Technique #30] Pipelined Double-Buffered Speculation ACTIVE (--spec-pipe)\n");
-        LOG_INF("   -> [Technique #31] Adaptive Spec-Tree PID Controller ACTIVE (--spec-tree-adaptive, target alpha=0.75)\n");
-        LOG_INF("   -> [Technique #32] Asymmetric Split-KV Engine ACTIVE (--split-kv, pure VRAM KV cache on CPU target)\n");
-        LOG_INF("   -> [Technique #37] GPU Top-K Logits Reduction ACTIVE (--logits-topk %d, 99.9%% PCIe transfer reduction)\n", params.logits_topk);
+        LOG_INF("   -> [Technique #28] Pipelined Double-Buffered Speculation ACTIVE (--spec-pipe)\n");
+        LOG_INF("   -> [Technique #29] Asymmetric Split-KV Engine ACTIVE (--split-kv, pure VRAM KV cache on CPU target)\n");
+        LOG_INF("   -> [Technique #34] GPU Top-K Logits Reduction ACTIVE (--logits-topk %d, 99.9%% PCIe transfer reduction)\n", params.logits_topk);
     }
 
     if (params.vnni_enabled) {
-        LOG_INF("   -> [Technique #33] AVX2-VNNI P-Core Vector Execution ACTIVE (Q2_K / IQ2_XXS _mm256_dpbusd_epi32)\n");
+        LOG_INF("   -> [Technique #30] AVX2-VNNI P-Core Vector Execution ACTIVE (Q2_K / IQ2_XXS _mm256_dpbusd_epi32)\n");
     }
 
     if (gpu_free_vram_b > 0) {
         params.flash_attn_native_quants = true;
-        LOG_INF("   -> [Technique #36] Quantized-Native CUDA FlashAttention ACTIVE (-fanq, 0 intermediate F16 buffer, sm_120 2x KQ half)\n");
+        LOG_INF("   -> [Technique #33] Quantized-Native CUDA FlashAttention ACTIVE (-fanq, 0 intermediate F16 buffer, sm_120 2x KQ half)\n");
 
         if (params.cache_type_k == GGML_TYPE_TURBO4_0 || params.cache_type_k == GGML_TYPE_TURBO3_0 || params.cache_type_k == GGML_TYPE_TURBO2_0) {
             params.turbo_mma = true;
             setenv("GGML_TURBO_MMA_FUSED", "1", 1);
-            LOG_INF("   -> [Technique #38] Fused TurboQuant MMA Tensor Core FlashAttention ACTIVE (--turbo-mma)\n");
+            LOG_INF("   -> [Technique #35] Fused TurboQuant MMA Tensor Core FlashAttention ACTIVE (--turbo-mma)\n");
         }
 
         if (params.turboquant_varn || (params.cache_type_k == GGML_TYPE_TURBO4_0 && ctx_eval >= 8192)) {
             params.turboquant_varn = true;
             setenv("SANDWICH_TURBOQUANT_VARN", "1", 1);
-            LOG_INF("   -> [Technique #54] TurboQuant Closed-Form Dual-Axis Variance Normalization ACTIVE (--turboquant-varn)\n");
+            LOG_INF("   -> [Technique #48] TurboQuant Closed-Form Dual-Axis Variance Normalization ACTIVE (--turboquant-varn)\n");
         }
 
         if (params.sched_async_cpu) {
-            LOG_INF("   -> [Technique #39] Asynchronous CPU Split Worker Overlap ACTIVE (--sched-async-cpu)\n");
+            LOG_INF("   -> [Technique #36] Asynchronous CPU Split Worker Overlap ACTIVE (--sched-async-cpu)\n");
         }
     }
 
-    // [Techniques #43 - #52 Synthesis] Frontier Kernel & Pipeline Activation
-    if (params.uvm_zero_copy) {
-        LOG_INF("   -> [Technique #43] Unified Zero-Copy Memory & UVM Prefetching ACTIVE (cudaMemAdviseSetAccessedBy)\n");
-    }
-
+    // [Techniques #41 - #46 Synthesis] Frontier Kernel & Pipeline Activation
     if (params.radix_cache) {
-        LOG_INF("   -> [Technique #45] Radix-Tree Persistent Prefix Caching ACTIVE (max %d tokens, 0ms TTFT prefix reuse)\n", params.radix_cache_tokens);
+        LOG_INF("   -> [Technique #41] Radix-Tree Persistent Prefix Caching ACTIVE (max %d tokens, 0ms TTFT prefix reuse)\n", params.radix_cache_tokens);
     }
 
     if (params.native_mtp || params.load_mtp) {
         params.native_mtp = true;
         params.load_mtp = true;
-        LOG_INF("   -> [Technique #49] Zero-Memory Native MTP Speculative Rollout ACTIVE (--native-mtp, 0MB drafter footprint)\n");
+        LOG_INF("   -> [Technique #43] Zero-Memory Native MTP Speculative Rollout ACTIVE (--native-mtp, 0MB drafter footprint)\n");
     }
 
     if (params.asym_kv_squeeze || (params.cache_type_k == GGML_TYPE_TURBO4_0 && params.cache_type_v == GGML_TYPE_TURBO2_0)) {
         params.asym_kv_squeeze = true;
         params.cache_type_k = GGML_TYPE_TURBO4_0;
         params.cache_type_v = GGML_TYPE_TURBO2_0;
-        LOG_INF("   -> [Technique #50] Asymmetric KV Outlier Channelling ACTIVE (K: turbo4 PolarQuant, V: turbo2 LogScale, 2.75 bits/tok)\n");
+        LOG_INF("   -> [Technique #44] Asymmetric KV Outlier Channelling ACTIVE (K: turbo4 PolarQuant, V: turbo2 LogScale, 2.75 bits/tok)\n");
     }
 
     if (params.chunked_prefill || ctx_eval >= 32768) {
@@ -2284,64 +2267,64 @@ void sandwich_auto_dispatch(common_params & params) {
         if (params.n_ubatch > 512 || params.n_ubatch == 0) {
             params.n_ubatch = 512;
         }
-        LOG_INF("   -> [Technique #51] Chunked Context Prefill & Ping-Pong Activation Staging ACTIVE (ubatch=%d, transient VRAM < 350MB)\n", params.n_ubatch);
+        LOG_INF("   -> [Technique #45] Chunked Context Prefill & Ping-Pong Activation Staging ACTIVE (ubatch=%d, transient VRAM < 350MB)\n", params.n_ubatch);
     }
 
     const bool is_mla = (model_arch == "deepseek2" || model_arch == "deepseek" || model_arch == "deepseek3" || model_arch == "deepseek4");
     if (params.latent_mla || is_mla) {
         params.latent_mla = true;
-        LOG_INF("   -> [Technique #52] Latent FlashMLA Direct Tensor Core MMA ACTIVE (--latent-mla, un-expanded manifold projection)\n");
+        LOG_INF("   -> [Technique #46] Latent FlashMLA Direct Tensor Core MMA ACTIVE (--latent-mla, un-expanded manifold projection)\n");
     }
 
-    // Phase 15: Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #55 - #63)
+    // Phase 15: Strata Assimilation & DeepSeek V4.1 Optimizations (Techniques #49 - #57)
     if (params.prefill_head_alias) {
-        LOG_INF("   -> [Technique #55] Prefill Head Aliasing ACTIVE (--prefill-head-alias, borrow output head VRAM during prefill)\n");
+        LOG_INF("   -> [Technique #49] Prefill Head Aliasing ACTIVE (--prefill-head-alias, borrow output head VRAM during prefill)\n");
     }
     if (params.kva_prefill || (ctx_eval >= 32768 && (is_moe || is_mla))) {
         params.kva_prefill = true;
-        LOG_INF("   -> [Technique #56] KVA Late-Layer Recurrence Prefill ACTIVE (--kva-prefill, skip late MoE forward passes)\n");
+        LOG_INF("   -> [Technique #50] KVA Late-Layer Recurrence Prefill ACTIVE (--kva-prefill, skip late MoE forward passes)\n");
     }
     if (params.moe_disjoint_guard) {
-        LOG_INF("   -> [Technique #57] Disjoint Peer Cache Guard ACTIVE (--moe-disjoint-guard, prevent duplicate expert slots)\n");
+        LOG_INF("   -> [Technique #51] Disjoint Peer Cache Guard ACTIVE (--moe-disjoint-guard, prevent duplicate expert slots)\n");
     }
     if (params.dma_batch) {
-        LOG_INF("   -> [Technique #58] Batched DMA Engine ACTIVE (--dma-batch, cudaMemcpyBatchAsync on CUDA 13+)\n");
+        LOG_INF("   -> [Technique #52] Batched DMA Engine ACTIVE (--dma-batch, cudaMemcpyBatchAsync on CUDA 13+)\n");
     }
     if (params.moe_exchange_rot) {
-        LOG_INF("   -> [Technique #59] Exchange Buffer Pointer Rotation ACTIVE (--moe-exchange-rot, zero-copy host DRAM swap)\n");
+        LOG_INF("   -> [Technique #53] Exchange Buffer Pointer Rotation ACTIVE (--moe-exchange-rot, zero-copy host DRAM swap)\n");
     }
     if (params.msg_boundary_cache) {
-        LOG_INF("   -> [Technique #60] Message-Boundary Delta Caching ACTIVE (--msg-cache, instant agent multi-turn edit)\n");
+        LOG_INF("   -> [Technique #54] Message-Boundary Delta Caching ACTIVE (--msg-cache, instant agent multi-turn edit)\n");
     }
     if (params.fused_expdec) {
-        LOG_INF("   -> [Technique #61] QSA_ROWS & EXPDEC Fused Shared-Memory Kernels ACTIVE (--fused-expdec)\n");
+        LOG_INF("   -> [Technique #55] QSA_ROWS & EXPDEC Fused Shared-Memory Kernels ACTIVE (--fused-expdec)\n");
     }
     if (params.dsv41_mode || model_arch == "deepseek4") {
         LOG_INF("   -> [DeepSeek V4.1 Flash] GSQ_RCO Native Mode ACTIVE (experts=%d/word, Engram async NVMe reader)\n", params.dsv41_experts);
     }
     if (params.dynamic_yarn && params.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN) {
-        LOG_INF("   -> [Technique #64] Dynamic YaRN Auto-Frequency Scaling ACTIVE (n_ctx=%d > train=%ld, scale=%.4f, orig_ctx=%d)\n",
+        LOG_INF("   -> [Technique #58] Dynamic YaRN Auto-Frequency Scaling ACTIVE (n_ctx=%d > train=%ld, scale=%.4f, orig_ctx=%d)\n",
                 ctx_eval, (long)n_ctx_train, params.rope_freq_scale, params.yarn_orig_ctx);
     }
     LOG_INF("   -> [Universal Attention Sink Guard] ACTIVE (--attn-sinks %d, prevents multi-turn context collapse)\n", params.n_sink_tokens);
     if (params.unrotated_kv) {
-        LOG_INF("   -> [Technique #66] Unrotated KV Staging ACTIVE (--unrotated-kv, O(1) zero-copy sliding context shifts)\n");
+        LOG_INF("   -> [Technique #60] Unrotated KV Staging ACTIVE (--unrotated-kv, O(1) zero-copy sliding context shifts)\n");
     }
 
     if (!params.peer_nodes.empty()) {
-        LOG_INF("   -> [Era 9: P2P Polar Mesh] Techniques #67-#72 ACTIVE\n");
+        LOG_INF("   -> [Era 9: P2P Polar Mesh] Techniques #61-#66 ACTIVE\n");
         LOG_INF("      * Peer Nodes: %s\n", params.peer_nodes.c_str());
-        LOG_INF("      * [Technique #67] Heterogeneous Distributed VRAM Pooling\n");
-        LOG_INF("      * [Technique #68] Topology Partitioning (compute/memory weighted)\n");
-        LOG_INF("      * [Technique #69] %s (Zero-Copy DMA: %s, Split-KV: %s)\n",
+        LOG_INF("      * [Technique #61] Heterogeneous Distributed VRAM Pooling\n");
+        LOG_INF("      * [Technique #62] Topology Partitioning (compute/memory weighted)\n");
+        LOG_INF("      * [Technique #63] %s (Zero-Copy DMA: %s, Split-KV: %s)\n",
                 params.peer_dma ? "Thunderbolt 4 / USB4 DMA PCIe" : "TCP/IP Socket Streaming",
                 params.peer_dma ? "ON" : "OFF",
                 params.peer_split_kv ? "ON" : "OFF");
-        LOG_INF("      * [Technique #70] 2-Bit Walsh-Hadamard Polar Net Quantization: %s (8x network compression)\n",
+        LOG_INF("      * [Technique #64] 2-Bit Walsh-Hadamard Polar Net Quantization: %s (8x network compression)\n",
                 params.peer_turbo_net ? "ON" : "OFF");
-        LOG_INF("      * [Technique #71] Distributed Speculative Pipeline: %s\n",
+        LOG_INF("      * [Technique #65] Distributed Speculative Pipeline: %s\n",
                 params.peer_spec_pipe ? "ON" : "OFF");
-        LOG_INF("      * [Technique #72] Dynamic Zero-Crash Failover: %s\n",
+        LOG_INF("      * [Technique #66] Dynamic Zero-Crash Failover: %s\n",
                 params.peer_fallback ? "ON" : "OFF");
     }
 
