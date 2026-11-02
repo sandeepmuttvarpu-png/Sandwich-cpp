@@ -56,7 +56,7 @@ void Router::print_help(const char * progname) {
     std::cout << "  -c, --ctx-size <n>          Context window size (default: 4096)\n";
     std::cout << "  -fa, --flash-attn           Enable Flash Attention 2\n";
     std::cout << "  -sm row                     MoE row-split cache tiering across VRAM/RAM/NVMe\n";
-    std::cout << "  -ctk, -ctv <type>           KV cache quantization (e.g. q3_k for TurboQuant 3)\n";
+    std::cout << "  -ctk, -ctv <type>           KV cache quantization (e.g. turbo3, turbo4, turbo2, f16)\n";
 }
 
 int Router::run_standalone_profiling(bool force) {
@@ -146,8 +146,13 @@ int Router::route(int argc, char ** argv) {
 
             std::vector<char*> c_args;
             c_args.push_back(argv[0]); // progname
-            // Skip argv[0] from synthesized command (it starts with ./sandwich run)
-            size_t start_idx = (args.size() > 2 && args[0] == "./sandwich" && args[1] == "run") ? 2 : 1;
+            // Skip binary name and optional 'run' token from synthesized command
+            size_t start_idx = 0;
+            if (args.size() > 1 && (args[0] == "./sandwich" || args[0] == "sandwich") && args[1] == "run") {
+                start_idx = 2;
+            } else if (args.size() > 0 && (args[0] == "./sandwich" || args[0] == "sandwich")) {
+                start_idx = 1;
+            }
             for (size_t i = start_idx; i < args.size(); ++i) {
                 c_args.push_back(const_cast<char*>(args[i].c_str()));
             }

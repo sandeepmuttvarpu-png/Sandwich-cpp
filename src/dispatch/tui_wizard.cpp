@@ -432,9 +432,10 @@ void TUIWizard::recompute_tiering_and_command() {
     if (state.radix_cache) cmd << "--radix-cache ";
     if (state.spec_tree) cmd << "--spec-tree ";
 
-    if (state.kv_quant == "turbo3") cmd << "-ctk q3_k -ctv q3_k ";
-    else if (state.kv_quant == "turbo4") cmd << "-ctk q4_0 -ctv q4_0 ";
-    else if (state.kv_quant == "turbo2") cmd << "-ctk q2_k -ctv q2_k ";
+    if (state.kv_quant == "turbo3") cmd << "-ctk turbo3 -ctv turbo3 ";
+    else if (state.kv_quant == "turbo4") cmd << "-ctk turbo4 -ctv turbo4 ";
+    else if (state.kv_quant == "turbo2") cmd << "-ctk turbo2 -ctv turbo2 ";
+    else if (state.kv_quant == "f16") cmd << "-ctk f16 -ctv f16 ";
 
     if (state.use_speculative && !state.selected_drafter.file_path.empty()) {
         cmd << "-md " << state.selected_drafter.file_path << " ";

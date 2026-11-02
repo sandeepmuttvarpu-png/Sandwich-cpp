@@ -571,11 +571,13 @@ TieringPlan HardwareProfiler::calculate_tiering(
         flags << "-sm row ";
     }
     if (kv_quant == "turbo3") {
-        flags << "-ctk q3_k -ctv q3_k ";
+        flags << "-ctk turbo3 -ctv turbo3 ";
     } else if (kv_quant == "turbo4") {
-        flags << "-ctk q4_0 -ctv q4_0 ";
+        flags << "-ctk turbo4 -ctv turbo4 ";
     } else if (kv_quant == "turbo2") {
-        flags << "-ctk q2_k -ctv q2_k ";
+        flags << "-ctk turbo2 -ctv turbo2 ";
+    } else if (kv_quant == "f16") {
+        flags << "-ctk f16 -ctv f16 ";
     }
 
     plan.recommended_flags = flags.str();
