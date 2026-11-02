@@ -1659,12 +1659,15 @@ void sandwich_auto_dispatch(common_params & params) {
     }
     int64_t gpu_total_vram_mb = (gpu_total_vram_b > 0) ? (int64_t)(gpu_total_vram_b / (1024 * 1024)) : 8192;
 
-    // Safety ceiling: 900 MB reserved for Wayland/X11 display server, OS framebuffers, and CUDA runtime context
-    int64_t safe_vram_cap_mb = (gpu_total_vram_mb > 1500) ? (gpu_total_vram_mb - 900) : 7100;
+    // Aggressive VRAM ceiling: reserve only 160 MB margin for CUDA runtime context and dynamic activation peaks.
+    // On Wayland (running on Intel iGPU), discrete GPU has ~2MB system overhead.
+    // Pushes VRAM to the edge (up to 7,900-8,000 MB) to maximize resident experts and throughput.
+    int64_t safe_vram_cap_mb = (gpu_total_vram_mb > 300) ? (gpu_total_vram_mb - 160) : gpu_total_vram_mb;
+    if (safe_vram_cap_mb > 8000) safe_vram_cap_mb = 8000;
     if (!params.vram_guard.empty()) {
         std::string vg = params.vram_guard;
         if (vg == "none" || vg == "uncapped" || vg == "max" || vg == "0") {
-            safe_vram_cap_mb = (gpu_total_vram_mb > 150) ? (gpu_total_vram_mb - 150) : gpu_total_vram_mb;
+            safe_vram_cap_mb = (gpu_total_vram_mb > 80) ? (gpu_total_vram_mb - 80) : gpu_total_vram_mb;
             LOG_INF("   -> [Sandwich VRAM Guard] UNCAPPED MODE ACTIVE (ceiling removed, allocating up to %ld MB)\n", (long)safe_vram_cap_mb);
         } else {
             try {
@@ -1678,11 +1681,9 @@ void sandwich_auto_dispatch(common_params & params) {
                 }
                 LOG_INF("   -> [Sandwich VRAM Guard] Custom VRAM limit applied: %ld MB\n", (long)safe_vram_cap_mb);
             } catch (...) {
-                if (safe_vram_cap_mb > 7100) safe_vram_cap_mb = 7100;
+                // keep safe_vram_cap_mb
             }
         }
-    } else {
-        if (safe_vram_cap_mb > 7100) safe_vram_cap_mb = 7100;
     }
 
     std::string key_block_count = model_arch + ".block_count";
@@ -1804,11 +1805,11 @@ void sandwich_auto_dispatch(common_params & params) {
             if (params.moe_cache_slots <= 0 && params.moe_cache_size == 0) {
                 // Auto-configure thecodacus Dual-Path MoE Expert Cache by default
                 if (expert_count >= 256) {
-                    params.moe_cache_slots = 32; // High-density micro-experts (e.g. Qwen3.6-35B) ~2.8-3.1 GB pack
+                    params.moe_cache_slots = 48; // High-density micro-experts (e.g. Qwen3.6-35B) pushed from 32 to 48 slots (~4.2 GB pack)
                 } else if (expert_count >= 64) {
-                    params.moe_cache_slots = 24; // Standard MoE (e.g. GLM-4.7 Flash, Nemotron 30B) ~2.4-2.8 GB pack
+                    params.moe_cache_slots = 36; // Standard MoE (e.g. GLM-4.7 Flash, Nemotron 30B) pushed from 24 to 36 slots (~3.6 GB pack)
                 } else if (expert_count > 0) {
-                    params.moe_cache_slots = std::min<int32_t>(16, (int32_t)expert_count);
+                    params.moe_cache_slots = std::min<int32_t>(32, (int32_t)expert_count);
                 }
             }
 
@@ -1818,12 +1819,12 @@ void sandwich_auto_dispatch(common_params & params) {
             } else {
                 size_t free_vram_mib = total_free_vram / (1024 * 1024);
                 size_t moe_cache_mib = 2048;
-                if (free_vram_mib > 5120) {
-                    moe_cache_mib = free_vram_mib - 3072;
-                } else if (free_vram_mib > 3072) {
-                    moe_cache_mib = free_vram_mib - 2048;
-                } else if (free_vram_mib > 1024) {
-                    moe_cache_mib = 1024;
+                if (free_vram_mib > 4000) {
+                    moe_cache_mib = free_vram_mib - 800; // Leave 800 MB for non-MoE weights + TurboQuant KV
+                } else if (free_vram_mib > 2000) {
+                    moe_cache_mib = free_vram_mib - 500;
+                } else if (free_vram_mib > 500) {
+                    moe_cache_mib = free_vram_mib - 200;
                 }
                 if (params.moe_cache_size == 0) {
                     params.moe_cache_size = moe_cache_mib * 1024 * 1024;
@@ -1867,10 +1868,10 @@ void sandwich_auto_dispatch(common_params & params) {
 
         LOG_INF("   -> Asynchronous MoE Prefetcher: 2 worker threads (madvise WILLNEED + COLD + Lookahead)\n");
         LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4\n");
-        LOG_INF("   -> Persistent Prompt Prefix Caching: 4 GiB Host RAM buffer & slot common-prefix matching active\n");
+        LOG_INF("   -> Persistent Prompt Prefix Caching: 6 GiB Host RAM buffer & slot common-prefix matching active\n");
 
         if (params.cache_ram_mib <= 0) {
-            params.cache_ram_mib     = 4096; // 4 GiB Host RAM prefix cache for OpenCode/Cline/Continue fast reuse
+            params.cache_ram_mib     = 6144; // 6 GiB Host RAM prefix cache for OpenCode/Cline/Continue fast reuse
         }
         params.cache_prompt          = true;
         params.cache_idle_slots      = true;
@@ -1994,7 +1995,7 @@ void sandwich_auto_dispatch(common_params & params) {
                 } else {
                     route_kv_to_host = false;
                     target_kv_type = GGML_TYPE_TURBO4_0;
-                    kv_reason = "Fits safely within 7,100 MB VRAM ceiling: GPU resident turbo4 (192 GB/s attention bandwidth)";
+                    kv_reason = "Fits safely within dynamic VRAM ceiling: GPU resident turbo4 (192 GB/s attention bandwidth)";
                 }
             } else {
                 target_kv_type = GGML_TYPE_TURBO4_0;
@@ -2154,7 +2155,7 @@ void sandwich_auto_dispatch(common_params & params) {
                 } else {
                     route_kv_to_host = false;
                     target_kv_type = GGML_TYPE_TURBO4_0;
-                    kv_reason = "Fits safely within 7,100 MB VRAM ceiling: GPU resident turbo4";
+                    kv_reason = "Fits safely within dynamic VRAM ceiling: GPU resident turbo4";
                 }
             } else {
                 target_kv_type = GGML_TYPE_TURBO4_0;
