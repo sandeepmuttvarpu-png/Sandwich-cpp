@@ -1896,7 +1896,7 @@ void sandwich_auto_dispatch(common_params & params) {
             LOG_INF("   -> TurboQuant KV Compression: cache_type_k = turbo4, cache_type_v = turbo4 (%ld MB)\n", (long)kv_turbo4_mb);
         }
         params.flash_attn_type       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
-        ggml_moe_prefetch_set_n_threads(2);
+        ggml_moe_prefetch_set_n_threads(4);
 
         // Auto-discover routing profile CSV if present in model directory
         if (params.moe_cache_profile.empty()) {
