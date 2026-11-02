@@ -324,9 +324,9 @@ void TUIWizard::screen_context_quant() {
 
     std::vector<int> contexts = {2048, 4096, 8192, 16384, 32768};
     std::vector<std::pair<std::string, std::string>> quants = {
-        {"turbo3", "3.5-bit TurboQuant (Sandwich Recommended - 62% KV reduction)"},
-        {"turbo4", "4.0-bit TurboQuant (Balanced - 50% KV reduction)"},
+        {"turbo4", "4.0-bit TurboQuant (Sandwich Recommended - 50% KV reduction, Native CUDA FA2)"},
         {"turbo2", "2.5-bit TurboQuant (Ultra-low VRAM - 75% KV reduction)"},
+        {"q8_0",   "8.0-bit Quantized (High fidelity, 50% VRAM reduction)"},
         {"f16",    "16-bit Full Precision (Standard baseline)"}
     };
 
@@ -432,9 +432,9 @@ void TUIWizard::recompute_tiering_and_command() {
     if (state.radix_cache) cmd << "--radix-cache ";
     if (state.spec_tree) cmd << "--spec-tree ";
 
-    if (state.kv_quant == "turbo3") cmd << "-ctk turbo3 -ctv turbo3 ";
-    else if (state.kv_quant == "turbo4") cmd << "-ctk turbo4 -ctv turbo4 ";
+    if (state.kv_quant == "turbo4") cmd << "-ctk turbo4 -ctv turbo4 ";
     else if (state.kv_quant == "turbo2") cmd << "-ctk turbo2 -ctv turbo2 ";
+    else if (state.kv_quant == "q8_0") cmd << "-ctk q8_0 -ctv q8_0 ";
     else if (state.kv_quant == "f16") cmd << "-ctk f16 -ctv f16 ";
 
     if (state.use_speculative && !state.selected_drafter.file_path.empty()) {
@@ -578,7 +578,7 @@ void TUIWizard::handle_input_drafter(const KeyEvent & ev) {
 
 void TUIWizard::handle_input_context(const KeyEvent & ev) {
     std::vector<int> contexts = {2048, 4096, 8192, 16384, 32768};
-    std::vector<std::string> quants = {"turbo3", "turbo4", "turbo2", "f16"};
+    std::vector<std::string> quants = {"turbo4", "turbo2", "q8_0", "f16"};
 
     if (ev.code == KeyCode::LEFT) {
         if (context_cursor > 0) context_cursor--;

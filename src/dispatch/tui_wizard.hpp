@@ -37,7 +37,7 @@ struct WizardConfig {
     ModelMetadata   selected_drafter;
     bool            use_speculative       = false;
     int             context_length        = 4096;
-    std::string     kv_quant              = "turbo3";
+    std::string     kv_quant              = "turbo4";
     bool            flash_attn            = true;
     bool            lock_p_cores          = true;
     bool            moe_row_split         = true;

@@ -102,7 +102,7 @@ public:
         int expert_count = 0,
         int active_experts = 0,
         int context_length = 4096,
-        const std::string & kv_quant = "turbo3"
+        const std::string & kv_quant = "turbo4"
     );
 
 private:

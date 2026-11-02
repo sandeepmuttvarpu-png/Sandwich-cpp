@@ -570,12 +570,12 @@ TieringPlan HardwareProfiler::calculate_tiering(
     if (is_moe) {
         flags << "-sm row ";
     }
-    if (kv_quant == "turbo3") {
-        flags << "-ctk turbo3 -ctv turbo3 ";
-    } else if (kv_quant == "turbo4") {
+    if (kv_quant == "turbo4") {
         flags << "-ctk turbo4 -ctv turbo4 ";
     } else if (kv_quant == "turbo2") {
         flags << "-ctk turbo2 -ctv turbo2 ";
+    } else if (kv_quant == "q8_0") {
+        flags << "-ctk q8_0 -ctv q8_0 ";
     } else if (kv_quant == "f16") {
         flags << "-ctk f16 -ctv f16 ";
     }
