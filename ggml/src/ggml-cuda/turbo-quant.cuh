@@ -176,7 +176,7 @@ static void turbo_innerq_init(void) {
     innerq_initialized = true;
 
     const char * env_varn = getenv("SANDWICH_TURBOQUANT_VARN");
-    int varn_active = (env_varn && atoi(env_varn) > 0) ? 1 : 0;
+    int varn_active = (!env_varn || atoi(env_varn) != 0) ? 1 : 0; // Default active (1) for unified Turbo-KVarN
     CUDA_CHECK(cudaMemcpyToSymbol(d_turboquant_varn, &varn_active, sizeof(int)));
 
     const char * env = getenv("TURBO_INNERQ");
@@ -277,7 +277,7 @@ static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
     }
     static int last_varn_active = -1;
     const char * env_varn = getenv("SANDWICH_TURBOQUANT_VARN");
-    int varn_active = (env_varn && atoi(env_varn) > 0) ? 1 : 0;
+    int varn_active = (!env_varn || atoi(env_varn) != 0) ? 1 : 0; // Default active (1) for unified Turbo-KVarN
     if (varn_active != last_varn_active) {
         last_varn_active = varn_active;
         CUDA_CHECK(cudaMemcpyToSymbol(d_turboquant_varn, &varn_active, sizeof(int)));

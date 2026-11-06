@@ -2234,10 +2234,11 @@ void sandwich_auto_dispatch(common_params & params) {
             LOG_INF("   -> [Technique #35] Fused TurboQuant MMA Tensor Core FlashAttention ACTIVE (--turbo-mma)\n");
         }
 
-        if (params.turboquant_varn || (params.cache_type_k == GGML_TYPE_TURBO4_0 && ctx_eval >= 8192)) {
+        // [Turbo-KVarN Unified Hybrid] Closed-Form Dual-Axis Variance Normalization
+        if (params.turboquant_varn || params.cache_type_k == GGML_TYPE_TURBO4_0 || params.cache_type_k == GGML_TYPE_TURBO3_0 || params.cache_type_k == GGML_TYPE_TURBO2_0) {
             params.turboquant_varn = true;
             setenv("SANDWICH_TURBOQUANT_VARN", "1", 1);
-            LOG_INF("   -> [Technique #48] TurboQuant Closed-Form Dual-Axis Variance Normalization ACTIVE (--turboquant-varn)\n");
+            LOG_INF("   -> [Turbo-KVarN] TurboQuant & KVarN Unified Hybrid ACTIVE (Closed-Form Dual-Axis Variance Normalization)\n");
         }
 
         if (params.sched_async_cpu) {

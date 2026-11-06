@@ -4546,16 +4546,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--turbo-varn", "--turbo-vran", "--turboquant-varn"},
-        "enable KVarN-style Closed-Form Dual-Axis Variance Normalization for TurboQuant KV cache (Technique #54 Turbo-VarN)",
+        {"--turbo-varn", "--turbo-vran", "--turboquant-varn", "--turbo-kvran"},
+        "enable Turbo-KVarN Unified Hybrid (Closed-Form Dual-Axis Variance Normalization for TurboQuant KV cache)",
         [](common_params & params) {
             params.turboquant_varn = true;
             setenv("SANDWICH_TURBOQUANT_VARN", "1", 1);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_TURBOQUANT_VARN"));
     add_opt(common_arg(
-        {"--no-turbo-varn", "--no-turbo-vran", "--no-turboquant-varn"},
-        "disable TurboQuant dual-axis variance normalization",
+        {"--no-turbo-varn", "--no-turbo-vran", "--no-turboquant-varn", "--no-turbo-kvran"},
+        "disable Turbo-KVarN dual-axis variance normalization",
         [](common_params & params) {
             params.turboquant_varn = false;
             setenv("SANDWICH_TURBOQUANT_VARN", "0", 1);
