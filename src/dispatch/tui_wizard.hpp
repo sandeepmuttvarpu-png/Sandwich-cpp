@@ -53,6 +53,8 @@ struct WizardConfig {
     bool            turbo_kvarn           = true;
     bool            dynamic_yarn          = true;
     bool            wayland_guard         = true;
+    bool            attn_sinks            = false;
+    bool            split_kv              = false;
     TieringPlan     tiering;
     std::string     synthesized_command;
     bool            should_launch         = false;
@@ -129,16 +131,23 @@ private:
     std::string model_filter;
     bool model_filter_mode = false;
 
-    // Drafters navigation
+    // Drafters navigation (horizontal scrolling)
     size_t drafter_cursor = 0; // 0=None, 1..N drafters
+    size_t drafter_page_offset = 0;
 
-    // Context & Quant navigation
-    size_t context_cursor = 1; // 0=2048, 1=4096, 2=8192, 3=16384, 4=32768, 5=65536
-    size_t kv_quant_cursor = 0; // 0=turbo4, 1=turbo-kvarn, 2=turbo3, 3=turbo2, 4=f16
+    // Context & Quant navigation (horizontal scrolling + custom)
+    size_t context_cursor = 1; // 0=2048, 1=4096, 2=8192, 3=16384, 4=32768, 5=65536, 6=131072, 7=Custom
+    size_t context_page_offset = 0;
+    bool   context_custom_mode = false;
+    std::string context_custom_str = "131072";
+
+    size_t kv_quant_cursor = 0; // 0..7
+    size_t kv_quant_page_offset = 0;
     int    cq_subfocus = 0; // 0 = context row, 1 = quant row
 
-    // Optimization Flags
-    size_t flags_cursor = 0; // 0..5 flags
+    // Optimization Flags navigation (2-column scrollable grid)
+    size_t flags_cursor = 0; // 0..9 flags
+    size_t flags_row_offset = 0;
     std::string last_hovered_hint;
 
     // Activity Log

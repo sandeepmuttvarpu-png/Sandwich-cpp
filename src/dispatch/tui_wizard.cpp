@@ -76,6 +76,9 @@ TUIWizard::TUIWizard() {
     state.turbo_kvarn     = true;
     state.dynamic_yarn    = true;
     state.wayland_guard   = true;
+    state.attn_sinks      = false;
+    state.split_kv        = false;
+    state.spec_tree       = false;
 
     // Default to first model
     if (!catalog.models.empty()) {
@@ -96,7 +99,8 @@ TUIWizard::TUIWizard() {
         }
     }
 
-    log_event("Console loaded. Discovered " + std::to_string(catalog.models.size()) + " models.");
+    log_event("Console loaded. Discovered " + std::to_string(catalog.models.size()) + " models & " +
+              std::to_string(catalog.drafters.size()) + " drafters.");
     log_event("Hardware: " + profile.cpu.model_name + " | " + profile.gpu.device_name);
 
     recompute_tiering_and_command();
@@ -121,7 +125,6 @@ void TUIWizard::enable_raw_mode() {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
         raw_mode_active = true;
 
-        // Enter alternate buffer, hide cursor, clear screen
         std::cout << "\033[?1049h\033[?25l\033[2J\033[H" << std::flush;
     }
 }
@@ -241,7 +244,7 @@ KeyEvent TUIWizard::read_key() {
     pfd.fd = STDIN_FILENO;
     pfd.events = POLLIN;
 
-    int ret = poll(&pfd, 1, 100); // 100ms polling
+    int ret = poll(&pfd, 1, 100);
     if (ret <= 0) return ev;
 
     char c;
@@ -309,11 +312,21 @@ void TUIWizard::recompute_tiering_and_command() {
         state.use_speculative = false;
     }
 
-    static const int ctx_options[] = {2048, 4096, 8192, 16384, 32768, 65536};
-    state.context_length = ctx_options[context_cursor % 6];
+    // Context Length resolution
+    static const int preset_ctx[] = {2048, 4096, 8192, 16384, 32768, 65536, 131072};
+    if (context_cursor < 7) {
+        state.context_length = preset_ctx[context_cursor];
+    } else {
+        int custom_val = std::atoi(context_custom_str.c_str());
+        if (custom_val > 0) state.context_length = custom_val;
+        else state.context_length = 131072;
+    }
 
-    static const char * kv_options[] = {"turbo4", "turbo-kvarn", "turbo3", "turbo2", "f16"};
-    state.kv_quant = kv_options[kv_quant_cursor % 5];
+    // KV Quant resolution
+    static const char * quant_keys[] = {
+        "turbo4", "turbo-kvran", "turbo3", "turbo2", "q8_0", "q4_0", "bf16", "f16"
+    };
+    state.kv_quant = quant_keys[kv_quant_cursor % 8];
 
     // Compute tiering
     state.tiering = HardwareProfiler::calculate_tiering(
@@ -327,17 +340,18 @@ void TUIWizard::recompute_tiering_and_command() {
         state.kv_quant
     );
 
-    // Build synthesized command line with 100% valid Sandwich flags
+    // Build synthesized command line
     std::ostringstream cmd;
     cmd << "./sandwich run -m " << state.selected_model.file_path;
 
     if (state.use_speculative && !state.selected_drafter.file_path.empty()) {
         cmd << " -md " << state.selected_drafter.file_path;
+        if (state.spec_tree) cmd << " --spec-tree";
     }
 
     cmd << " -c " << state.context_length;
 
-    if (state.kv_quant == "turbo-kvarn") {
+    if (state.kv_quant == "turbo-kvran") {
         cmd << " -ctk turbo4 -ctv turbo4 --turbo-kvran";
     } else {
         cmd << " -ctk " << state.kv_quant << " -ctv " << state.kv_quant;
@@ -349,26 +363,32 @@ void TUIWizard::recompute_tiering_and_command() {
     if (state.radix_cache)   cmd << " --radix-cache";
     if (state.wayland_guard) cmd << " -fitt " << WAYLAND_VRAM_GUARD_MB;
     if (state.dynamic_yarn)  cmd << " --dynamic-yarn";
+    if (state.attn_sinks)    cmd << " --attn-sinks 4";
+    if (state.split_kv)      cmd << " --split-kv";
 
     state.synthesized_command = cmd.str();
 
-    // Update single-line hint string
+    // Single-line hint update
     switch (active_section) {
         case ActiveSection::MODELS:
-            last_hovered_hint = "Selected Model: " + state.selected_model.display_name + " ──▶ [Enter] Launches immediately";
+            last_hovered_hint = "Model: " + state.selected_model.display_name + " ──▶ [Enter] Runs Model Now";
             break;
         case ActiveSection::DRAFTERS:
             if (state.use_speculative) {
                 last_hovered_hint = "Speculative Drafter: " + state.selected_drafter.filename + " ──▶ Adds: -md " + state.selected_drafter.filename;
             } else {
-                last_hovered_hint = "Single-Token Decoding (No drafter) ──▶ [Enter] Launches";
+                last_hovered_hint = "Single-Token Decoding (No drafter) ──▶ [←/→] Browse drafters";
             }
             break;
         case ActiveSection::CONTEXT_QUANT:
             if (cq_subfocus == 0) {
-                last_hovered_hint = "Context Window: " + std::to_string(state.context_length) + " tokens ──▶ Adds: -c " + std::to_string(state.context_length);
+                if (context_cursor == 7) {
+                    last_hovered_hint = "Custom Context Window: " + std::to_string(state.context_length) + " ──▶ Type digits or press [Space] to edit";
+                } else {
+                    last_hovered_hint = "Context Window: " + std::to_string(state.context_length) + " tokens ──▶ Adds: -c " + std::to_string(state.context_length);
+                }
             } else {
-                if (state.kv_quant == "turbo-kvarn") {
+                if (state.kv_quant == "turbo-kvran") {
                     last_hovered_hint = "KV Quant: Turbo-KVarN Fused Hybrid ──▶ Adds: -ctk turbo4 -ctv turbo4 --turbo-kvran";
                 } else {
                     last_hovered_hint = "KV Quant: " + state.kv_quant + " ──▶ Adds: -ctk " + state.kv_quant + " -ctv " + state.kv_quant;
@@ -376,14 +396,19 @@ void TUIWizard::recompute_tiering_and_command() {
             }
             break;
         case ActiveSection::OPTIMIZATION_FLAGS: {
-            switch (flags_cursor) {
-                case 0: last_hovered_hint = "Flash Attention 2: Hardware-accelerated attention ──▶ Adds: -fa"; break;
-                case 1: last_hovered_hint = "Turbo-KVarN Hybrid: 4-bit Polar quantization ──▶ Adds: --turbo-kvran"; break;
-                case 2: last_hovered_hint = "Dynamic YaRN: Context retention scaling ──▶ Adds: --dynamic-yarn"; break;
-                case 3: last_hovered_hint = "P-Core Affinity: Pin to 6 physical CPU cores ──▶ Adds: -t 6"; break;
-                case 4: last_hovered_hint = "MoE Row-Split: Expert memory tiering (VRAM/RAM) ──▶ Adds: -sm row"; break;
-                case 5: last_hovered_hint = "Wayland Guard: Reserve 850 MB VRAM for compositor ──▶ Adds: -fitt 7100"; break;
-            }
+            static const char * flag_descs[] = {
+                "Flash Attention 2: Memory-efficient attention ──▶ Adds: -fa",
+                "Turbo-KVarN Hybrid: 4-bit Polar quantization ──▶ Adds: --turbo-kvran",
+                "Dynamic YaRN: Context retention scaling ──▶ Adds: --dynamic-yarn",
+                "P-Core Affinity: Pin compute to physical cores ──▶ Adds: -t 6",
+                "MoE Row-Split: Expert memory tiering ──▶ Adds: -sm row",
+                "Wayland Guard: 7.1GB VRAM compositor protection ──▶ Adds: -fitt 7100",
+                "Radix Prefix Cache: Multi-turn prompt reuse ──▶ Adds: --radix-cache",
+                "Attention Sinks: Preserve first 4 sink tokens ──▶ Adds: --attn-sinks 4",
+                "EAGLE Spec Tree: Multi-path draft decoding ──▶ Adds: --spec-tree",
+                "Asymmetric Split-KV: Pin KV cache in VRAM ──▶ Adds: --split-kv"
+            };
+            if (flags_cursor < 10) last_hovered_hint = flag_descs[flags_cursor];
             break;
         }
         default:
@@ -408,6 +433,9 @@ void TUIWizard::save_preset() {
     j["turbo_kvarn"]   = state.turbo_kvarn;
     j["dynamic_yarn"]  = state.dynamic_yarn;
     j["wayland_guard"] = state.wayland_guard;
+    j["attn_sinks"]    = state.attn_sinks;
+    j["split_kv"]      = state.split_kv;
+    j["spec_tree"]     = state.spec_tree;
     j["command"]       = state.synthesized_command;
 
     std::ofstream ofs(out_path);
@@ -421,14 +449,14 @@ void TUIWizard::render_dashboard() {
     update_terminal_size();
 
     std::ostringstream out;
-    out << "\033[H"; // Cursor to top-left
+    out << "\033[H";
 
     int left_w = static_cast<int>(term_cols * 0.68);
     int right_w = term_cols - left_w - 2;
     if (left_w < 46) left_w = 46;
     if (right_w < 24) right_w = 24;
 
-    int content_h = term_rows - 4; // leave 3 rows at bottom for Hint, Command, Status
+    int content_h = term_rows - 4;
     if (content_h < 14) content_h = 14;
 
     render_header(out);
@@ -448,10 +476,10 @@ void TUIWizard::render_dashboard() {
 
         const char * help_lines[] = {
             "  [Enter] / [F5]        Launch Sandwich Engine with current settings",
-            "  [↑] / [↓]             Browse models / navigate flags",
-            "  [←] / [→]             Change Context length or KV Quant",
+            "  [↑] / [↓]             Browse models / navigate flags grid",
+            "  [←] / [→]             Horizontally scroll drafters, context, & quant",
             "  [Tab] / [Shift+Tab]   Switch between Model, Drafter, Context, Flags",
-            "  [Space]               Toggle optimization checkbox",
+            "  [Space]               Toggle flag checkbox / edit custom context",
             "  [/]                   Quick-search filter for model catalog",
             "  [R]                   Rescan local GGUF models on disk",
             "  [S]                   Save current setup to ~/.config/sandwich/presets",
@@ -503,7 +531,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
     bool act_models = (active_section == ActiveSection::MODELS);
     print_box_header(act_models ? "1. MODELS (Active: [Enter] Runs)" : "1. MODELS", act_models);
 
-    // Search bar
+    // Filter bar
     out << "\033[" << r++ << ";" << start_col << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
     if (model_filter_mode) {
         out << CLR_LIGHT_YEL << "Search [/]: " << CLR_BOLD << model_filter << "█" << CLR_RESET;
@@ -528,7 +556,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         }
     }
 
-    const size_t page_sz = 3; // Keep compact to fit 24 rows
+    const size_t page_sz = 3;
     if (matched_idx.empty()) {
         out << "\033[" << r++ << ";" << start_col << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│ "
             << CLR_RED << "No models matching filter" << CLR_RESET;
@@ -570,74 +598,168 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
     print_box_footer(act_models);
 
     // ─────────────────────────────────────────────────────────────
-    // 2. SPECULATIVE DRAFTER
+    // 2. SPECULATIVE DRAFTER (Horizontal Scrolling)
     // ─────────────────────────────────────────────────────────────
     bool act_d = (active_section == ActiveSection::DRAFTERS);
-    print_box_header(act_d ? "2. SPECULATIVE DRAFTER (Active)" : "2. SPECULATIVE DRAFTER", act_d);
+    print_box_header(act_d ? "2. SPECULATIVE DRAFTER (Active: [←/→] Scroll)" : "2. SPECULATIVE DRAFTER", act_d);
     out << "\033[" << r++ << ";" << start_col << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
 
-    bool is_d0 = (drafter_cursor == 0);
-    if (is_d0 && act_d) {
-        out << BG_YEL << "[ None ]" << CLR_RESET << " ";
-    } else if (is_d0) {
-        out << CLR_LIGHT_YEL << "[● None]" << CLR_RESET << " ";
-    } else {
-        out << CLR_GRAY << "[ None ]" << CLR_RESET << " ";
+    size_t total_drafters = catalog.drafters.size() + 1; // 0=None, 1..N
+    if (drafter_cursor >= total_drafters) drafter_cursor = total_drafters - 1;
+
+    // Slide drafter window so drafter_cursor is always visible
+    const size_t visible_drafter_count = 2; // fits ~2 long pills + indicators
+    if (drafter_cursor < drafter_page_offset) {
+        drafter_page_offset = drafter_cursor;
+    } else if (drafter_cursor >= drafter_page_offset + visible_drafter_count) {
+        drafter_page_offset = drafter_cursor - visible_drafter_count + 1;
     }
 
-    for (size_t di = 0; di < std::min((size_t)2, catalog.drafters.size()); ++di) {
-        bool is_cur_d = (drafter_cursor == di + 1);
-        std::string fn = catalog.drafters[di].filename;
-        if (fn.size() > 22) fn = fn.substr(0, 19) + "..";
-        if (is_cur_d && act_d) {
-            out << BG_YEL << "[ " << fn << " ]" << CLR_RESET << " ";
-        } else if (is_cur_d) {
-            out << CLR_LIGHT_YEL << "[● " << fn << "]" << CLR_RESET << " ";
+    // Left scroll arrow
+    if (drafter_page_offset > 0) out << CLR_LIGHT_YEL << "◀ " << CLR_RESET;
+    else out << CLR_DARK_GRAY << "  " << CLR_RESET;
+
+    for (size_t di = 0; di < visible_drafter_count; ++di) {
+        size_t d_idx = drafter_page_offset + di;
+        if (d_idx >= total_drafters) break;
+
+        bool is_cur_d = (drafter_cursor == d_idx);
+        std::string label;
+        if (d_idx == 0) {
+            label = "None (Single-Token)";
         } else {
-            out << CLR_GRAY << "[ " << fn << " ]" << CLR_RESET << " ";
+            label = catalog.drafters[d_idx - 1].filename;
+            if (label.size() > 22) label = label.substr(0, 19) + "..";
+        }
+
+        if (is_cur_d && act_d) {
+            out << BG_YEL << "▶ [ " << label << " ]" << CLR_RESET << " ";
+        } else if (is_cur_d) {
+            out << CLR_LIGHT_YEL << "[● " << label << "]" << CLR_RESET << " ";
+        } else {
+            out << CLR_GRAY << "[ " << label << " ]" << CLR_RESET << " ";
         }
     }
+
+    // Right scroll arrow
+    if (drafter_page_offset + visible_drafter_count < total_drafters) {
+        out << CLR_LIGHT_YEL << "▶" << CLR_RESET;
+    }
+
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
     print_box_footer(act_d);
 
     // ─────────────────────────────────────────────────────────────
-    // 3. CONTEXT & KV QUANTIZATION
+    // 3. CONTEXT & KV QUANTIZATION (Horizontal Scrolling + Custom)
     // ─────────────────────────────────────────────────────────────
     bool act_cq = (active_section == ActiveSection::CONTEXT_QUANT);
-    print_box_header(act_cq ? "3. CONTEXT & KV QUANT (Active: [←/→] Select)" : "3. CONTEXT & KV QUANT", act_cq);
+    print_box_header(act_cq ? "3. CONTEXT & KV QUANT (Active: [←/→] Scroll, [Space] Edit)" : "3. CONTEXT & KV QUANT", act_cq);
 
-    // Context line
+    // Row 1: Context Lengths (Preset + Custom)
     out << "\033[" << r++ << ";" << start_col << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
     out << CLR_BOLD << "Ctx:   " << CLR_RESET;
-    static const int ctx_vals[] = {2048, 4096, 8192, 16384, 32768, 65536};
-    for (size_t ci = 0; ci < 6; ++ci) {
-        bool is_ctx = (ci == context_cursor);
-        bool focused = (act_cq && cq_subfocus == 0 && is_ctx);
-        if (focused) out << BG_YEL << "[" << ctx_vals[ci] << "]" << CLR_RESET << " ";
-        else if (is_ctx) out << CLR_LIGHT_YEL << "[●" << ctx_vals[ci] << "]" << CLR_RESET << " ";
-        else out << CLR_GRAY << "[" << ctx_vals[ci] << "]" << CLR_RESET << " ";
+
+    static const char * ctx_labels[] = {
+        "2048", "4096", "8192", "16384", "32768", "65536", "131072"
+    };
+    size_t total_ctx_options = 8; // 0..6 presets + 7 Custom
+    if (context_cursor >= total_ctx_options) context_cursor = total_ctx_options - 1;
+
+    const size_t visible_ctx_count = 5;
+    if (context_cursor < context_page_offset) {
+        context_page_offset = context_cursor;
+    } else if (context_cursor >= context_page_offset + visible_ctx_count) {
+        context_page_offset = context_cursor - visible_ctx_count + 1;
     }
+
+    if (context_page_offset > 0) out << CLR_LIGHT_YEL << "◀ " << CLR_RESET;
+    else out << "  ";
+
+    for (size_t ci = 0; ci < visible_ctx_count; ++ci) {
+        size_t c_idx = context_page_offset + ci;
+        if (c_idx >= total_ctx_options) break;
+
+        bool is_cur = (context_cursor == c_idx);
+        bool focused = (act_cq && cq_subfocus == 0 && is_cur);
+
+        std::string pill;
+        if (c_idx == 7) {
+            if (context_custom_mode) pill = "Custom: " + context_custom_str + "█";
+            else pill = "Custom: " + context_custom_str;
+        } else {
+            pill = ctx_labels[c_idx];
+        }
+
+        if (focused) {
+            out << BG_YEL << "[" << pill << "]" << CLR_RESET << " ";
+        } else if (is_cur) {
+            out << CLR_LIGHT_YEL << "[●" << pill << "]" << CLR_RESET << " ";
+        } else {
+            out << CLR_GRAY << "[" << pill << "]" << CLR_RESET << " ";
+        }
+    }
+
+    if (context_page_offset + visible_ctx_count < total_ctx_options) {
+        out << CLR_LIGHT_YEL << "▶" << CLR_RESET;
+    }
+
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
 
-    // KV Quant line
+    // Row 2: KV Quantization (Horizontal Scrolling across all 8 quant modes)
     out << "\033[" << r++ << ";" << start_col << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
     out << CLR_BOLD << "Quant: " << CLR_RESET;
-    static const char * kv_names[] = {"turbo4 (4-bit)", "turbo-kvran (Fused)", "turbo3 (3-bit)", "f16"};
-    for (size_t ki = 0; ki < 4; ++ki) {
-        bool is_kv = (ki == kv_quant_cursor);
-        bool focused = (act_cq && cq_subfocus == 1 && is_kv);
-        if (focused) out << BG_YEL << "[" << kv_names[ki] << "]" << CLR_RESET << " ";
-        else if (is_kv) out << CLR_LIGHT_YEL << "[●" << kv_names[ki] << "]" << CLR_RESET << " ";
-        else out << CLR_GRAY << "[" << kv_names[ki] << "]" << CLR_RESET << " ";
+
+    static const char * quant_labels[] = {
+        "turbo4 (4-bit)",
+        "turbo-kvran (Fused)",
+        "turbo3 (3-bit)",
+        "turbo2 (2-bit)",
+        "q8_0 (8-bit)",
+        "q4_0 (4-bit)",
+        "bf16",
+        "f16"
+    };
+    size_t total_quant_options = 8;
+    if (kv_quant_cursor >= total_quant_options) kv_quant_cursor = total_quant_options - 1;
+
+    const size_t visible_quant_count = 3;
+    if (kv_quant_cursor < kv_quant_page_offset) {
+        kv_quant_page_offset = kv_quant_cursor;
+    } else if (kv_quant_cursor >= kv_quant_page_offset + visible_quant_count) {
+        kv_quant_page_offset = kv_quant_cursor - visible_quant_count + 1;
     }
+
+    if (kv_quant_page_offset > 0) out << CLR_LIGHT_YEL << "◀ " << CLR_RESET;
+    else out << "  ";
+
+    for (size_t qi = 0; qi < visible_quant_count; ++qi) {
+        size_t q_idx = kv_quant_page_offset + qi;
+        if (q_idx >= total_quant_options) break;
+
+        bool is_cur_q = (kv_quant_cursor == q_idx);
+        bool focused_q = (act_cq && cq_subfocus == 1 && is_cur_q);
+
+        if (focused_q) {
+            out << BG_YEL << "[" << quant_labels[q_idx] << "]" << CLR_RESET << " ";
+        } else if (is_cur_q) {
+            out << CLR_LIGHT_YEL << "[●" << quant_labels[q_idx] << "]" << CLR_RESET << " ";
+        } else {
+            out << CLR_GRAY << "[" << quant_labels[q_idx] << "]" << CLR_RESET << " ";
+        }
+    }
+
+    if (kv_quant_page_offset + visible_quant_count < total_quant_options) {
+        out << CLR_LIGHT_YEL << "▶" << CLR_RESET;
+    }
+
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
     print_box_footer(act_cq);
 
     // ─────────────────────────────────────────────────────────────
-    // 4. OPTIMIZATION FLAGS (Compact 2-Column Grid)
+    // 4. OPTIMIZATION FLAGS (10 Flags in 2-Column Scrollable Grid)
     // ─────────────────────────────────────────────────────────────
     bool act_f = (active_section == ActiveSection::OPTIMIZATION_FLAGS);
-    print_box_header(act_f ? "4. OPTIMIZATION FLAGS (Active: [Space] Toggle)" : "4. OPTIMIZATION FLAGS", act_f);
+    print_box_header(act_f ? "4. OPTIMIZATION FLAGS (Active: [Space] Toggle, [↑/↓/←/→] Navigate)" : "4. OPTIMIZATION FLAGS", act_f);
 
     struct FlagItem {
         bool & val;
@@ -649,28 +771,50 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         {state.turbo_kvarn,   "Turbo-KVarN Hybrid", "--turbo-kvran"},
         {state.dynamic_yarn,  "Dynamic YaRN Scaling", "--dynamic-yarn"},
         {state.lock_p_cores,  "Pin 6 Intel P-Cores", "-t 6"},
-        {state.moe_row_split, "MoE Row-Split Tiering", "-sm row"},
-        {state.wayland_guard, "7.1GB Wayland Guard", "-fitt 7100"}
+        {state.moe_row_split, "MoE Row-Split Tier", "-sm row"},
+        {state.wayland_guard, "7.1GB Wayland Guard", "-fitt 7100"},
+        {state.radix_cache,   "Radix Prefix Cache", "--radix-cache"},
+        {state.attn_sinks,    "Attention Sinks (4)", "--attn-sinks 4"},
+        {state.spec_tree,     "EAGLE Spec Tree", "--spec-tree"},
+        {state.split_kv,      "Asymmetric Split-KV", "--split-kv"}
     };
 
+    size_t total_flag_rows = 5; // 10 flags = 5 rows x 2 columns
+    size_t cur_row = flags_cursor / 2;
+    if (cur_row < flags_row_offset) {
+        flags_row_offset = cur_row;
+    } else if (cur_row >= flags_row_offset + 3) {
+        flags_row_offset = cur_row - 3 + 1;
+    }
+
     for (size_t row_i = 0; row_i < 3; ++row_i) {
+        size_t actual_row = flags_row_offset + row_i;
+        if (actual_row >= total_flag_rows) break;
+
         out << "\033[" << r++ << ";" << start_col << "H" << (act_f ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
 
+        // Scroll indicator on top-right or bottom-right
+        if (row_i == 0 && flags_row_offset > 0) out << CLR_LIGHT_YEL << "▲ " << CLR_RESET;
+        else if (row_i == 2 && flags_row_offset + 3 < total_flag_rows) out << CLR_LIGHT_YEL << "▼ " << CLR_RESET;
+        else out << "  ";
+
         // Col 1
-        size_t fi1 = row_i * 2;
+        size_t fi1 = actual_row * 2;
         bool cur1 = (act_f && flags_cursor == fi1);
         std::string m1 = flag_items[fi1].val ? "[✔] " : "[ ] ";
         if (cur1) out << BG_YEL << "▶ " << m1 << flag_items[fi1].name << " " << CLR_RESET;
         else out << (flag_items[fi1].val ? CLR_GREEN : CLR_GRAY) << m1 << CLR_RESET << CLR_GRAY << std::left << std::setw(20) << flag_items[fi1].name << CLR_RESET;
 
-        out << "   ";
+        out << " ";
 
         // Col 2
-        size_t fi2 = row_i * 2 + 1;
-        bool cur2 = (act_f && flags_cursor == fi2);
-        std::string m2 = flag_items[fi2].val ? "[✔] " : "[ ] ";
-        if (cur2) out << BG_YEL << "▶ " << m2 << flag_items[fi2].name << " " << CLR_RESET;
-        else out << (flag_items[fi2].val ? CLR_GREEN : CLR_GRAY) << m2 << CLR_RESET << CLR_GRAY << std::left << std::setw(20) << flag_items[fi2].name << CLR_RESET;
+        size_t fi2 = actual_row * 2 + 1;
+        if (fi2 < 10) {
+            bool cur2 = (act_f && flags_cursor == fi2);
+            std::string m2 = flag_items[fi2].val ? "[✔] " : "[ ] ";
+            if (cur2) out << BG_YEL << "▶ " << m2 << flag_items[fi2].name << " " << CLR_RESET;
+            else out << (flag_items[fi2].val ? CLR_GREEN : CLR_GRAY) << m2 << CLR_RESET << CLR_GRAY << std::left << std::setw(20) << flag_items[fi2].name << CLR_RESET;
+        }
 
         out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_f ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
     }
@@ -682,7 +826,7 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
     int half_h = (height - 2) / 2;
 
     // ─────────────────────────────────────────────────────────────
-    // UPPER HALF: ACTIVITY & DIAGNOSTIC LOG
+    // UPPER HALF: ACTIVITY LOG
     // ─────────────────────────────────────────────────────────────
     out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD
         << "┌─[ " << CLR_LIGHT_YEL << "ACTIVITY LOG" << CLR_GOLD << " ]"
@@ -705,7 +849,7 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
     out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "└" << repeat_utf8("─", std::max(0, width - 2)) << "┘" << CLR_RESET << "\033[K";
 
     // ─────────────────────────────────────────────────────────────
-    // LOWER HALF: REAL-TIME SYSTEM HARDWARE MONITOR
+    // LOWER HALF: REAL-TIME SYSTEM MONITOR
     // ─────────────────────────────────────────────────────────────
     LiveHardwareStats st;
     {
@@ -756,7 +900,7 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
 }
 
 void TUIWizard::render_footer(std::ostringstream & out) {
-    // Row term_rows - 2: Single-Line Clean Hint Bar (outside the box layout)
+    // Row term_rows - 2: Single-Line Clean Hint Bar
     out << "\033[" << (term_rows - 2) << ";1H"
         << CLR_LIGHT_YEL << "💡 Hint: " << CLR_RESET << last_hovered_hint
         << "\033[K";
@@ -771,13 +915,28 @@ void TUIWizard::render_footer(std::ostringstream & out) {
     // Row term_rows: Clean Status / Hotkey bar
     out << "\033[" << term_rows << ";1H"
         << BG_GOLD << " [Enter] Launch Selected Model " << CLR_RESET << " "
-        << CLR_GOLD << "[↑/↓] Browse Models  [Tab] Switch Section  [Space] Toggle  [/] Search  [Esc] Quit" << CLR_RESET
+        << CLR_GOLD << "[↑/↓/←/→] Navigate  [Tab] Switch Section  [Space] Toggle/Edit  [/] Search  [Esc] Quit" << CLR_RESET
         << "\033[K";
 }
 
 void TUIWizard::handle_input(const KeyEvent & ev) {
     if (help_overlay_active) {
         help_overlay_active = false;
+        return;
+    }
+
+    if (context_custom_mode) {
+        if (ev.code == KeyCode::ENTER || ev.code == KeyCode::ESCAPE) {
+            context_custom_mode = false;
+            int val = std::atoi(context_custom_str.c_str());
+            if (val > 0) state.context_length = val;
+            log_event("Custom context set to: " + std::to_string(state.context_length));
+        } else if (ev.code == KeyCode::BACKSPACE) {
+            if (!context_custom_str.empty()) context_custom_str.pop_back();
+        } else if (ev.code == KeyCode::CHAR && ev.ch >= '0' && ev.ch <= '9') {
+            if (context_custom_str.size() < 8) context_custom_str.push_back(ev.ch);
+        }
+        recompute_tiering_and_command();
         return;
     }
 
@@ -809,7 +968,7 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
             state.should_launch = true;
             return;
         case KeyCode::ENTER:
-            // PRESSING ENTER LAUNCHES THE ENGINE DIRECTLY!
+            // Pressing Enter in Models, Context, Drafters, or Flags directly launches the engine!
             log_event("Launch command dispatched (Enter).");
             state.should_launch = true;
             return;
@@ -827,6 +986,11 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                 log_event("Rescan done: " + std::to_string(catalog.models.size()) + " models found.");
             } else if (ev.ch == 's' || ev.ch == 'S') {
                 save_preset();
+            } else if (active_section == ActiveSection::CONTEXT_QUANT && cq_subfocus == 0 && context_cursor == 7 && ev.ch >= '0' && ev.ch <= '9') {
+                // Quick start custom context typing
+                context_custom_mode = true;
+                context_custom_str.clear();
+                context_custom_str.push_back(ev.ch);
             }
             break;
         case KeyCode::UP:
@@ -842,7 +1006,7 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
             if (active_section == ActiveSection::MODELS) {
                 if (model_cursor + 1 < catalog.models.size()) model_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
-                if (flags_cursor + 2 < 6) flags_cursor += 2;
+                if (flags_cursor + 2 < 10) flags_cursor += 2;
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
                 cq_subfocus = 1;
             }
@@ -861,10 +1025,10 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
             if (active_section == ActiveSection::DRAFTERS) {
                 if (drafter_cursor < catalog.drafters.size()) drafter_cursor++;
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
-                if (cq_subfocus == 0 && context_cursor < 5) context_cursor++;
-                else if (cq_subfocus == 1 && kv_quant_cursor < 3) kv_quant_cursor++;
+                if (cq_subfocus == 0 && context_cursor < 7) context_cursor++;
+                else if (cq_subfocus == 1 && kv_quant_cursor < 7) kv_quant_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
-                if (flags_cursor % 2 == 0 && flags_cursor + 1 < 6) flags_cursor++;
+                if (flags_cursor % 2 == 0 && flags_cursor + 1 < 10) flags_cursor++;
             }
             break;
         case KeyCode::SPACE:
@@ -876,7 +1040,14 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                     case 3: state.lock_p_cores  = !state.lock_p_cores;  log_event(std::string("P-Core Affinity: ") + (state.lock_p_cores ? "ON" : "OFF")); break;
                     case 4: state.moe_row_split = !state.moe_row_split; log_event(std::string("MoE Row-Split: ") + (state.moe_row_split ? "ON" : "OFF")); break;
                     case 5: state.wayland_guard = !state.wayland_guard; log_event(std::string("Wayland Guard: ") + (state.wayland_guard ? "ON" : "OFF")); break;
+                    case 6: state.radix_cache   = !state.radix_cache;   log_event(std::string("Radix Cache: ") + (state.radix_cache ? "ON" : "OFF")); break;
+                    case 7: state.attn_sinks    = !state.attn_sinks;    log_event(std::string("Attention Sinks: ") + (state.attn_sinks ? "ON" : "OFF")); break;
+                    case 8: state.spec_tree     = !state.spec_tree;     log_event(std::string("EAGLE Spec Tree: ") + (state.spec_tree ? "ON" : "OFF")); break;
+                    case 9: state.split_kv      = !state.split_kv;      log_event(std::string("Split-KV Engine: ") + (state.split_kv ? "ON" : "OFF")); break;
                 }
+            } else if (active_section == ActiveSection::CONTEXT_QUANT && cq_subfocus == 0 && context_cursor == 7) {
+                context_custom_mode = true;
+                log_event("Entering custom context edit mode.");
             } else if (active_section == ActiveSection::MODELS) {
                 log_event("Selected model: " + catalog.models[model_cursor].display_name);
             }
@@ -903,13 +1074,13 @@ bool TUIWizard::run(WizardConfig & out_config) {
 
         KeyEvent ev = read_key();
         if (ev.code != KeyCode::UNKNOWN) {
-            if (ev.code == KeyCode::ESCAPE && !help_overlay_active && !model_filter_mode) {
+            if (ev.code == KeyCode::ESCAPE && !help_overlay_active && !model_filter_mode && !context_custom_mode) {
                 running = false;
                 state.should_launch = false;
                 break;
             }
 
-            if (ev.code == KeyCode::CHAR && (ev.ch == 'q' || ev.ch == 'Q') && !model_filter_mode && !help_overlay_active) {
+            if (ev.code == KeyCode::CHAR && (ev.ch == 'q' || ev.ch == 'Q') && !model_filter_mode && !help_overlay_active && !context_custom_mode) {
                 running = false;
                 state.should_launch = false;
                 break;
