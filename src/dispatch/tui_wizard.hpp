@@ -9,6 +9,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <sstream>
 #include <termios.h>
 
 namespace sandwich {
@@ -63,7 +64,6 @@ enum class ActiveSection {
     DRAFTERS,
     CONTEXT_QUANT,
     OPTIMIZATION_FLAGS,
-    LAUNCH_ACTION,
     COUNT
 };
 
@@ -92,8 +92,8 @@ private:
     HardwareProfile profile;
     ModelCatalog    catalog;
     WizardConfig    state;
-    int             term_rows = 30;
-    int             term_cols = 120;
+    int             term_rows = 24;
+    int             term_cols = 100;
 
     // Terminal Raw Mode Management
     struct termios  orig_termios;
@@ -106,12 +106,12 @@ private:
 
     // Split-Pane Layout Renderer
     void render_dashboard();
-    void render_header();
-    void render_footer();
+    void render_header(std::ostringstream & out);
+    void render_footer(std::ostringstream & out);
 
     // Sub-panel renderers
-    void render_left_panel(int start_row, int start_col, int width, int height);
-    void render_right_panel(int start_row, int start_col, int width, int height);
+    void render_left_panel(std::ostringstream & out, int start_row, int start_col, int width, int height);
+    void render_right_panel(std::ostringstream & out, int start_row, int start_col, int width, int height);
 
     // Event & Input Handlers
     void handle_input(const KeyEvent & ev);
@@ -138,15 +138,15 @@ private:
     int    cq_subfocus = 0; // 0 = context row, 1 = quant row
 
     // Optimization Flags
-    size_t flags_cursor = 0; // 0..6 flags
-    std::string last_hovered_flag_desc;
-    std::string last_hovered_flag_arg;
+    size_t flags_cursor = 0; // 0..5 flags
+    std::string last_hovered_hint;
 
     // Activity Log
     std::vector<std::string> event_logs;
 
     // Background Hardware Monitor Thread
     std::atomic<bool> monitor_running{false};
+    std::atomic<bool> stats_updated{false};
     std::thread monitor_thread;
     std::mutex stats_mutex;
     LiveHardwareStats live_stats;
