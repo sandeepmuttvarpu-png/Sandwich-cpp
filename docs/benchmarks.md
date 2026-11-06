@@ -93,6 +93,19 @@ Flagship 120B Mixture of Experts model evaluated on HP Victus 15 (RTX 5050 Lapto
 > 2. **Optimal Configuration:** Offloading all 36 attention backbone layers to GPU (`-ngl 37 -cmoe` or `--sandwich-auto`) offloads ~2.2 GB into VRAM, keeping compute-heavy self-attention on the CUDA cores while streaming expert weights.
 > 3. **Dynamic MoE Cache:** `--sandwich-auto` dynamically utilizes up to **6.77 GB VRAM** (85% of GPU capacity) to cache hot MoE expert slices, giving the fastest prompt processing at **2.6 tk/s**.
 
+#### F. Qwen3.8-Flash-Next 125B MoE (`IQ3_XXS`) — 78.34 GB (512 Fine-Grained Routed Experts / 48 Layers)
+
+Flagship 125B fine-grained Mixture of Experts model evaluated on HP Victus 15 (RTX 5050 Mobile 8GB VRAM + 24GB DDR5 Host RAM + NVMe 3-tier streaming). Full report: [`docs/benchmarks/qwen_125b_moe_maiden_benchmark.md`](benchmarks/qwen_125b_moe_maiden_benchmark.md).
+
+| Configuration | Model Suite Size | Active Footprint | Prompt Speed (PP) | Decode Speed (TG) | VRAM Used | Invariant Status |
+|---|---|---|---|---|---|---|
+| **Sandwich 3-Tier Hierarchy** (`--sandwich-auto -fitt 1200 -ctk turbo4`) | **78.34 GB** (2 shards + MTP drafter) | 4.04 GB VRAM + 6.68 GB DDR5 + NVMe io_uring | **2.4 tk/s** | **0.30 tk/s** | 4,040 MiB | 🏆 0 crashes, 0 OOMs, 7,100 MB Wayland Guard strictly enforced |
+
+> **Key Observations:**
+> 1. **Zero-Crash Execution of 78GB Suite:** The multi-shard 125B MoE architecture (`qwen4exp`) with 512 fine-grained routed experts and sparse Multi-Head Indexer executes cleanly without driver crashes.
+> 2. **Wayland Guard Invariant Enforced:** Peak VRAM saturation remained capped at **4,040 MiB**, leaving a ~4 GB safety buffer well below the 7,100 MB Wayland threshold.
+> 3. **Turbo-KVarN Indexer Decoupling:** Re-routed the 50MB auxiliary indexer cache (`cache_idx_k`) to `F16` while preserving `turbo4` 4-bit compression on the primary attention cache, eliminating `ops.cpp:5424` aborts.
+
 ---
 
 ### 2. High-Speed Dense Models (< 8GB VRAM, 100% GPU Offload)
