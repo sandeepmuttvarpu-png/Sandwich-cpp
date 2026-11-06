@@ -214,7 +214,6 @@ public:
         for (int32_t exp : predicted_experts) {
             auto prefetch_expert_tensor = [this, exp](const struct ggml_tensor * t) {
                 if (!t || !t->data) return;
-                if (t->buffer && !ggml_backend_buffer_is_host(t->buffer)) return;
                 const size_t expert_size = t->nb[2];
                 void * addr = (uint8_t *) t->data + (size_t) exp * expert_size;
                 if (is_registered(addr, expert_size)) {

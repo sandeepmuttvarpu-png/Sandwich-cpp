@@ -2938,7 +2938,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_MOE_PROBATION"));
     add_opt(common_arg(
         {"--moe-warm-ram-mb"}, "N",
-        "Phase 12 Tier 2 WARM DDR5 RAM pool budget in MiB (default: 12288)",
+        "Phase 12 Tier 2 WARM DDR5 RAM pool budget in MiB (default: 20480)",
         [](common_params & params, int value) {
             if (value <= 0) {
                 throw std::invalid_argument("invalid value");

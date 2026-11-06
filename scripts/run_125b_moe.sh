@@ -28,18 +28,24 @@ PROMPT="${1:-Write a high-performance concurrent work-stealing thread pool in mo
 N_PREDICT="${2:-64}"
 shift 2 2>/dev/null || shift $# 2>/dev/null || true
 
+SPEC_MODE="${SPEC_MODE:-ngram}" # 'ngram' (Zero-VRAM, max VRAM for hot experts) or 'mtp' (GPU MTP drafter)
+WARM_RAM_MB="${WARM_RAM_MB:-18432}" # Squeeze 18.0 GiB of warm experts into DDR5 RAM (22.2 GB total RSS, zero swap thrashing)
+
 echo ">> Model Shards : Shard 1 (47.3 GB) & Shard 2 (28.8 GB)"
-if [ -f "${MTP_DRAFTER}" ]; then
+if [ "${SPEC_MODE}" = "mtp" ] && [ -f "${MTP_DRAFTER}" ]; then
     echo ">> Spec Drafter : ${MTP_DRAFTER} (Native GPU MTP Head Decoding, -ngld 99)"
-    DRAFT_ARG="-md ${MTP_DRAFTER} -ngld 99"
+    DRAFT_ARG="-md ${MTP_DRAFTER} -ngld 99 -fitt 4200"
+    VRAM_HOT_DESC="Target margin 4200 MiB (fit base + 2.1GB MTP drafter on GPU)"
 else
-    echo ">> Spec Drafter : Disabled"
-    DRAFT_ARG=""
+    echo ">> Spec Drafter : Zero-VRAM Context N-Gram Lookup (--spec-type ngram-simple)"
+    DRAFT_ARG="--spec-type ngram-simple --vram-slab 2400M -fitt 1200"
+    VRAM_HOT_DESC="2,400 MiB Tier 1 HOT VRAM Expert Slab + Turbo-KVarN KV Cache"
 fi
-echo ">> VRAM Fit     : Target margin 1200 MiB (Strict 7,100 MB Wayland VRAM Guard)"
+echo ">> Tier 1 VRAM  : ${VRAM_HOT_DESC} (Strict 7,100 MB Wayland Guard)"
+echo ">> Tier 2 RAM   : ${WARM_RAM_MB} MiB (20 GiB) WARM DDR5 Pool Squeezed (Zero Disk Trimming)"
+echo ">> Tier 3 SSD   : COLD Long-Tail Experts Streamed on Demand via io_uring DMA (depth 128)"
 echo ">> KV Cache     : Turbo-KVarN Unified 4-Bit (turbo4 + closed-form unit-variance)"
-echo ">> MoE Streaming: 3-Tier io_uring direct NVMe (depth 128) + 2Q Ghost Cache (14GB DDR5 pool)"
-echo ">> Strata Assim.: Batched PCIe DMA, pointer rotation, disjoint guard"
+echo ">> Strata Assim.: Batched PCIe DMA, pointer rotation, disjoint guard, 2Q Ghost Cache"
 echo "======================================================================"
 
 exec "${CLI_BIN}" \
@@ -49,13 +55,12 @@ exec "${CLI_BIN}" \
     --sched-async-cpu \
     --dma-batch \
     --moe-exchange-rot \
-    --moe-disjoint-guard \
     --moe-2q \
+    --moe-warm-ram-mb "${WARM_RAM_MB}" \
     --io-uring \
     --io-uring-qd 128 \
     --perf \
     --single-turn \
-    -fitt 1200 \
     -ctk turbo4 -ctv turbo4 \
     -fa on \
     -t 6 \

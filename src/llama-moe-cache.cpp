@@ -502,6 +502,92 @@ struct llama_moe_cache::impl {
             }
 #endif
         }
+
+        void prepopulate_warm_pool(const llama_model & model, const std::vector<layer> & layers, const std::vector<group> & groups) {
+            if (model.hparams.no_alloc) return;
+            const char * env_prepop = std::getenv("SANDWICH_MOE_PREPOPULATE");
+            if (env_prepop && std::strcmp(env_prepop, "0") == 0) {
+                LLAMA_LOG_INFO("%s: Tier 2 WARM DDR5 pool pre-population skipped via env\n", __func__);
+                return;
+            }
+            if (!enabled || pool_mem == nullptr || n_warm_slots <= 0) return;
+
+            size_t n_moe_layers = 0;
+            for (size_t il = 0; il < layers.size(); ++il) {
+                if (layers[il].ig >= 0 && !layers[il].experts.empty()) {
+                    n_moe_layers++;
+                }
+            }
+            if (n_moe_layers == 0) return;
+
+            int32_t slots_per_layer = n_warm_slots / (int32_t)n_moe_layers;
+            if (slots_per_layer <= 0) slots_per_layer = 1;
+
+            LLAMA_LOG_INFO("%s: [Phase 12] Squeezing ~%.2f GiB warm micro-experts into Tier 2 DDR5 RAM (%d slots/layer across %zu layers)...\n",
+                __func__, (double)pool_capacity / (1024.0 * 1024.0 * 1024.0), slots_per_layer, n_moe_layers);
+
+            int64_t t0_us = llama_time_us();
+            size_t total_prepopulated = 0;
+            int32_t current_slot = 0;
+
+            for (size_t il = 0; il < layers.size(); ++il) {
+                if (layers[il].ig < 0 || layers[il].experts.empty() || il >= locators.size()) {
+                    continue;
+                }
+                const layer & l = layers[il];
+                if (l.ig < 0 || (size_t)l.ig >= groups.size() || groups[l.ig].ref.empty()) continue;
+                int32_t n_expert = groups[l.ig].ref[0]->ne[2];
+                int32_t to_warm = std::min<int32_t>(n_expert, slots_per_layer);
+
+                for (int32_t e = 0; e < to_warm && current_slot < n_warm_slots; ++e) {
+                    if ((size_t)e >= locators[il].size()) break;
+                    auto & loc = locators[il][e];
+                    int32_t s = current_slot++;
+                    warm_slots[s] = { (int32_t)il, e };
+                    uint8_t * slot_mem = (uint8_t *)pool_mem + (size_t)s * slot_stride;
+                    loc.warm_slot = s;
+                    loc.ram_ptr   = slot_mem;
+                    loc.tier      = moe_tier_level::TIER_WARM_RAM;
+
+                    for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+                        const ggml_tensor * w = l.experts[ip];
+                        if (!w || !w->data) continue;
+                        const size_t tensor_len = w->nb[2];
+                        if ((size_t)l.ig >= group_tensor_offsets.size() || ip >= group_tensor_offsets[l.ig].size()) continue;
+                        const size_t tensor_off = group_tensor_offsets[l.ig][ip];
+                        uint8_t * dst_ptr = slot_mem + tensor_off;
+                        const void * src_ptr = (const uint8_t *)w->data + e * tensor_len;
+
+                        int fd = -1;
+                        size_t file_offset = 0;
+                        if (!model.get_mmap_info(src_ptr, fd, file_offset)) {
+                            fd = model.get_mmap_fd();
+                            const uint8_t * mmap_addr = (const uint8_t *)model.get_mmap_addr();
+                            if (mmap_addr && (const uint8_t *)src_ptr >= mmap_addr) {
+                                file_offset = (const uint8_t *)src_ptr - mmap_addr;
+                            } else {
+                                fd = -1;
+                            }
+                        }
+                        if (fd >= 0) {
+                            ssize_t n = pread(fd, dst_ptr, tensor_len, file_offset);
+                            if (n != (ssize_t)tensor_len) {
+                                std::memcpy(dst_ptr, src_ptr, tensor_len);
+                            }
+                        } else {
+                            std::memcpy(dst_ptr, src_ptr, tensor_len);
+                        }
+                    }
+                    total_prepopulated++;
+                }
+            }
+            warm_slots_used = current_slot;
+            int64_t t1_us = llama_time_us();
+            LLAMA_LOG_INFO("%s: [Phase 12] Squeezed %zu warm micro-experts (%.2f GiB) into DDR5 RAM in %.2f s (Zero Disk Trimming!)\n",
+                __func__, total_prepopulated,
+                ((double)total_prepopulated * (double)slot_stride) / (1024.0 * 1024.0 * 1024.0),
+                (t1_us - t0_us) * 1e-6);
+        }
     } tier_engine;
 
     // slot maps in host memory
@@ -801,7 +887,7 @@ struct llama_moe_cache::impl {
         }
 
         // Initialize Phase 12: 3-Tier Hierarchical MoE Memory System
-        if (moe_3tier && !groups.empty()) {
+        if (moe_3tier && !groups.empty() && !model.hparams.no_alloc) {
             size_t expert_bytes = 0;
             for (const ggml_tensor * t : groups[0].ref) {
                 expert_bytes += t->nb[2];
@@ -809,7 +895,7 @@ struct llama_moe_cache::impl {
             if (expert_bytes > 0) {
                 tier_engine.slot_stride = (expert_bytes + 4095) & ~((size_t)4095); // 4KB aligned
 
-                size_t target_cap = warm_ram_bytes > 0 ? warm_ram_bytes : 12ULL * 1024 * 1024 * 1024;
+                size_t target_cap = warm_ram_bytes > 0 ? warm_ram_bytes : 20ULL * 1024 * 1024 * 1024;
                 void * mem = nullptr;
                 while (target_cap >= 512ULL * 1024 * 1024) {
                     int ret = posix_memalign(&mem, 2 * 1024 * 1024, target_cap);
@@ -881,6 +967,7 @@ struct llama_moe_cache::impl {
                 }
 
                 LLAMA_LOG_INFO("%s: [Phase 12] Universal 3-Tier MoE Pinning ACTIVE (W_gate & Shared Experts in VRAM)\n", __func__);
+                tier_engine.prepopulate_warm_pool(*this->model, layers, groups);
             }
         }
 
@@ -1077,7 +1164,7 @@ struct llama_moe_cache::impl {
         }
 
         // Phase 5: Trigger concurrent Early-Lookahead Router prefetch for Layer L+1 while GPU computes
-        if (ggml_moe_prefetch_enabled()) {
+        if (ggml_moe_prefetch_enabled() && !tier_engine.enabled) {
             ggml_moe_prefetch_lookahead_step(il, ids.data(), ids.size());
         }
         if (tier_engine.enabled && (size_t)(il + 1) < layers.size()) {

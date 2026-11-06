@@ -644,7 +644,7 @@ struct common_params {
     bool        moe_3tier                  = true;  // Phase 12: 3-Tier Hierarchical MoE Memory System (HOT VRAM -> WARM DDR5 -> COLD NVMe)
     int32_t     io_uring_qd                = 128;   // Phase 12: Dynamic Expert Shard Paging io_uring queue depth (default: 128)
     bool        moe_2q                     = true;  // Phase 12: 2Q & Ghost-Cache Replacement Policy (default: true)
-    int32_t     moe_warm_ram_mb            = 14336; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in MiB (default: 14336)
+    int32_t     moe_warm_ram_mb            = 20480; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in MiB (default: 20480 = 20 GiB)
 
     // Phase 13 & 14 Frontier Techniques (Techniques #43 - #52)
     bool        uvm_zero_copy              = true;  // [Technique #43] Unified Zero-Copy Memory & UVM Prefetching

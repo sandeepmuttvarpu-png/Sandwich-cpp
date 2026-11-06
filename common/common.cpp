@@ -1792,6 +1792,13 @@ void sandwich_auto_dispatch(common_params & params) {
 
         const bool fits_in_vram = (total_free_vram > 0 && model_file_size > 0 && model_file_size + 1536ULL * 1024 * 1024 < total_free_vram);
 
+#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGE_SIZE)
+        int64_t total_host_ram_mb = ((int64_t)sysconf(_SC_PHYS_PAGES) * (int64_t)sysconf(_SC_PAGE_SIZE)) / (1024 * 1024);
+        if (total_host_ram_mb >= 22000 && params.moe_warm_ram_mb <= 14336) {
+            params.moe_warm_ram_mb = 18432; // Squeeze 18 GiB into Tier 2 WARM DDR5 pool on 24GB host (22.2 GB total RSS, zero swap)
+        }
+#endif
+
         if (fits_in_vram && params.moe_cache_size == 0 && params.moe_cache_slots <= 0) {
             LOG_INF("   -> Model fits entirely within VRAM (%zu MiB vs %zu MiB free). Full GPU offload.\n",
                     (size_t)(model_file_size / (1024 * 1024)), total_free_vram / (1024 * 1024));
@@ -1802,7 +1809,24 @@ void sandwich_auto_dispatch(common_params & params) {
             // 1. Thecodacus Static Hot-Pack Cache (params.moe_cache_slots > 0): contiguous VRAM resident hot experts.
             // 2. BeeLlama Dynamic Slab Cache (params.moe_cache_size > 0): dynamic runtime LRU slab.
             // These two systems MUST remain strictly mutually exclusive to prevent double VRAM allocation and OOM.
-            if (params.moe_cache_slots <= 0 && params.moe_cache_size == 0) {
+            if (params.moe_3tier) {
+                // Phase 12: 3-Tier Hierarchical Engine uses the Dynamic VRAM Slab
+                params.moe_cache_slots = 0;
+                size_t free_vram_mib = total_free_vram / (1024 * 1024);
+                size_t moe_cache_mib = 2048;
+                if (free_vram_mib > 6000) {
+                    moe_cache_mib = 2400;
+                } else if (free_vram_mib > 4000) {
+                    moe_cache_mib = 1800;
+                } else if (free_vram_mib > 2000) {
+                    moe_cache_mib = 1024;
+                }
+                if (params.moe_cache_size == 0) {
+                    params.moe_cache_size = moe_cache_mib * 1024 * 1024;
+                }
+                LOG_INF("   -> [Phase 12] Universal 3-Tier MoE Engine: ACTIVE (Tier 1: %zu MiB VRAM Slab, Tier 2: %d MiB DDR5 THP, Tier 3: io_uring NVMe DMA)\n",
+                        params.moe_cache_size / (1024 * 1024), params.moe_warm_ram_mb);
+            } else if (params.moe_cache_slots <= 0 && params.moe_cache_size == 0) {
                 // Auto-configure thecodacus Dual-Path MoE Expert Cache by default
                 if (expert_count >= 256) {
                     params.moe_cache_slots = 48; // High-density micro-experts (e.g. Qwen3.6-35B) pushed from 32 to 48 slots (~4.2 GB pack)
@@ -1811,9 +1835,11 @@ void sandwich_auto_dispatch(common_params & params) {
                 } else if (expert_count > 0) {
                     params.moe_cache_slots = std::min<int32_t>(32, (int32_t)expert_count);
                 }
-            }
-
-            if (params.moe_cache_slots > 0) {
+                if (params.moe_cache_slots > 0) {
+                    params.moe_cache_size = 0;
+                    LOG_INF("   -> Thecodacus MoE Expert Cache: %d VRAM resident slots/layer (BeeLlama slab disabled)\n", params.moe_cache_slots);
+                }
+            } else if (params.moe_cache_slots > 0) {
                 params.moe_cache_size = 0; // Disable BeeLlama slab to prevent double allocation!
                 LOG_INF("   -> Thecodacus MoE Expert Cache: %d VRAM resident slots/layer (BeeLlama slab disabled)\n", params.moe_cache_slots);
             } else {
@@ -1831,10 +1857,6 @@ void sandwich_auto_dispatch(common_params & params) {
                 }
                 LOG_INF("   -> Modern MoE Cache: %zu MiB VRAM Expert Slab (O(1) LRU eviction)\n",
                         params.moe_cache_size / (1024 * 1024));
-                if (params.moe_3tier) {
-                    LOG_INF("   -> [Phase 12] Universal 3-Tier MoE Engine: ACTIVE (Tier 1: VRAM Slab, Tier 2: %d MiB DDR5 THP, Tier 3: io_uring NVMe DMA)\n",
-                            params.moe_warm_ram_mb);
-                }
             }
 
             // Ensure expert weights stay in host memory so GPU cache stages them
@@ -1919,7 +1941,12 @@ void sandwich_auto_dispatch(common_params & params) {
         std::string drafter_path = params.speculative.draft.mparams.path;
         bool drafter_found = !drafter_path.empty();
 
-        if (!drafter_found) {
+        const bool has_explicit_non_model_spec = !params.speculative.types.empty() &&
+            (params.speculative.types[0] == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE ||
+             params.speculative.types[0] == COMMON_SPECULATIVE_TYPE_NGRAM_MOD ||
+             params.speculative.types[0] == COMMON_SPECULATIVE_TYPE_NONE);
+
+        if (!drafter_found && !has_explicit_non_model_spec) {
             drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size, embedding_length, tok_model);
             if (!drafter_path.empty()) {
                 drafter_found = true;

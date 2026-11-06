@@ -424,12 +424,8 @@ struct moe_cache_lru {
                 continue;
             }
 
-            // Technique #57: Disjoint Peer Cache Guard (STRATA_DISJOINT_ADAPT)
-            // If peer tier holds this expert, skip local VRAM promotion to eliminate duplicate slots
-            if (disjoint_guard_enabled && peer_holds(il, e)) {
-                stat_disjoint_conflicts_prevented++;
-                continue;
-            }
+            // Note: If peer tier (DDR5 RAM) holds this expert, it will be uploaded from RAM via PCIe DMA in ensure_warm_batch,
+            // but it still MUST be allocated a valid VRAM bank slot s here so that CUDA kernels do not index bank[-1].
 
             const bool is_ghost = in_ghost(il, e);
             if (is_ghost) {
