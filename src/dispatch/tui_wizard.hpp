@@ -6,6 +6,9 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <atomic>
+#include <thread>
+#include <mutex>
 #include <termios.h>
 
 namespace sandwich {
@@ -17,6 +20,7 @@ enum class KeyCode {
     ESCAPE,
     BACKSPACE,
     TAB,
+    BACKTAB,
     SPACE,
     UP,
     DOWN,
@@ -24,6 +28,8 @@ enum class KeyCode {
     RIGHT,
     PAGE_UP,
     PAGE_DOWN,
+    F1,
+    F5,
     CHAR
 };
 
@@ -43,10 +49,34 @@ struct WizardConfig {
     bool            moe_row_split         = true;
     bool            radix_cache           = true;
     bool            spec_tree             = false;
+    bool            turbo_kvarn           = true;
+    bool            dynamic_yarn          = true;
+    bool            wayland_guard         = true;
     TieringPlan     tiering;
     std::string     synthesized_command;
     bool            should_launch         = false;
     bool            saved_preset          = false;
+};
+
+enum class ActiveSection {
+    MODELS = 0,
+    DRAFTERS,
+    CONTEXT_QUANT,
+    OPTIMIZATION_FLAGS,
+    LAUNCH_ACTION,
+    COUNT
+};
+
+struct LiveHardwareStats {
+    uint64_t gpu_used_mb   = 0;
+    uint64_t gpu_total_mb  = 8151;
+    int      gpu_temp_c    = 36;
+    int      gpu_util_pct  = 0;
+    uint64_t ram_free_mb   = 0;
+    uint64_t ram_total_mb  = 23646;
+    int      cpu_temp_c    = 45;
+    double   disk_free_gb  = 0.0;
+    double   disk_total_gb = 0.0;
 };
 
 class TUIWizard {
@@ -54,7 +84,7 @@ public:
     TUIWizard();
     ~TUIWizard();
 
-    // Runs the interactive TUI wizard flow
+    // Runs the unified split-pane interactive TUI
     // Returns true if user chose to Launch, populating out_config
     bool run(WizardConfig & out_config);
 
@@ -62,9 +92,8 @@ private:
     HardwareProfile profile;
     ModelCatalog    catalog;
     WizardConfig    state;
-    int             current_screen = 0; // 0=Welcome, 1=Model, 2=Drafter, 3=Context, 4=Flags, 5=Review
-    int             term_rows = 24;
-    int             term_cols = 80;
+    int             term_rows = 30;
+    int             term_cols = 120;
 
     // Terminal Raw Mode Management
     struct termios  orig_termios;
@@ -75,43 +104,55 @@ private:
     void update_terminal_size();
     KeyEvent read_key();
 
-    // Screen Renderers
-    void render();
-    void render_header(const std::string & title);
-    void render_footer(const std::string & navigation_help);
+    // Split-Pane Layout Renderer
+    void render_dashboard();
+    void render_header();
+    void render_footer();
 
-    void screen_welcome();
-    void screen_model_selection();
-    void screen_drafter_selection();
-    void screen_context_quant();
-    void screen_advanced_flags();
-    void screen_review_launch();
+    // Sub-panel renderers
+    void render_left_panel(int start_row, int start_col, int width, int height);
+    void render_right_panel(int start_row, int start_col, int width, int height);
 
-    // Navigation and state handlers
-    void handle_input_welcome(const KeyEvent & ev);
-    void handle_input_model(const KeyEvent & ev);
-    void handle_input_drafter(const KeyEvent & ev);
-    void handle_input_context(const KeyEvent & ev);
-    void handle_input_flags(const KeyEvent & ev);
-    void handle_input_review(const KeyEvent & ev);
-
-    // Helpers
+    // Event & Input Handlers
+    void handle_input(const KeyEvent & ev);
     void recompute_tiering_and_command();
     void save_preset();
+    void log_event(const std::string & msg);
 
-    // Paging / Selection State
+    // State
+    ActiveSection active_section = ActiveSection::MODELS;
+    bool help_overlay_active = false;
+
+    // Models navigation
     size_t model_cursor = 0;
     size_t model_page_offset = 0;
     std::string model_filter;
     bool model_filter_mode = false;
 
-    size_t drafter_option = 0; // 0=Recommended, 1=Manual, 2=Skip
-    size_t drafter_cursor = 0;
+    // Drafters navigation
+    size_t drafter_cursor = 0; // 0=None, 1..N drafters
 
-    size_t context_cursor = 1; // index into {2048, 4096, 8192, 16384, 32768}
-    size_t kv_quant_cursor = 0; // index into {turbo3, turbo4, turbo2, f16}
+    // Context & Quant navigation
+    size_t context_cursor = 1; // 0=2048, 1=4096, 2=8192, 3=16384, 4=32768, 5=65536
+    size_t kv_quant_cursor = 0; // 0=turbo4, 1=turbo-kvarn, 2=turbo3, 3=turbo2, 4=f16
+    int    cq_subfocus = 0; // 0 = context row, 1 = quant row
 
-    size_t flags_cursor = 0;
+    // Optimization Flags
+    size_t flags_cursor = 0; // 0..6 flags
+    std::string last_hovered_flag_desc;
+    std::string last_hovered_flag_arg;
+
+    // Activity Log
+    std::vector<std::string> event_logs;
+
+    // Background Hardware Monitor Thread
+    std::atomic<bool> monitor_running{false};
+    std::thread monitor_thread;
+    std::mutex stats_mutex;
+    LiveHardwareStats live_stats;
+    void start_hardware_monitor();
+    void stop_hardware_monitor();
+    void update_hardware_stats();
 };
 
 } // namespace dispatch
