@@ -82,11 +82,12 @@ Here is exactly how **Sandwich.cpp** changes the game:
   * **Pure VRAM Asymmetric Split-KV (`--split-kv`):** Reclaims 100% of GPU VRAM for the **FlashAttention Tensor Core Engine** and **TurboQuant KV Cache**. Even though weights run on CPU, attention runs on 192 GB/s GDDR6 VRAM.
   * **100% VRAM Speculative Drafter:** Offloads an aligned 1B assistant model (e.g. Llama-3.2-1B) into leftover VRAM. The drafter generates candidate trees at **180+ t/s** in GPU memory, while the CPU target verifies the batch in parallel.
 
-### 4. TurboQuant Polar Compression vs. Exponential KV Degradation
-* **Others:** At 64k–128k context, FP16 or standard Q8/Q4 KV caches consume 14GB–30GB of memory, causing OOM or dropping generation speeds by 60–80%.
-* **Sandwich.cpp (Techniques #9, #29, #38):** Uses **TurboQuant polar Lloyd-Max quantization** with orthonormal Walsh-Hadamard pre-rotation:
+### 4. TurboQuant & Turbo-KVarN Unified Hybrid vs. Exponential KV Degradation
+* **Others:** At 64k–128k context, FP16 or standard Q8/Q4 KV caches consume 14GB–30GB of memory, causing OOM or dropping generation speeds by 60–80%. Furthermore, discrete quantization causes token norm drift that triggers recursive attention-sink collapse during extended Chain-of-Thought reasoning.
+* **Sandwich.cpp (Techniques #9, #29, #38, #48):** Fuses **TurboQuant Polar Lloyd-Max Quantization** with **KVarN Closed-Form Dual-Axis Variance Normalization**:
   * Compresses KV tensors down to 4-bit (`turbo4`, 75% saved), 3-bit (`turbo3`, 81.25% saved), or 2-bit (`turbo2`, 87.5% saved).
   * Direct fused register-level MMA FlashAttention (`--turbo-mma`) dequantizes tiles on-the-fly inside Tensor Cores.
+  * **KVarN Unit-Variance Calibration (Technique #48):** Re-calibrates token norms on-the-fly via warp butterfly shuffles ($\|\hat{\mathbf{v}}\|_2 \equiv \|\mathbf{v}\|_2$), entirely eliminating attention-sink scale collapse and reasoning drift across 128k context windows.
   * **Decay Invariance:** Delivers nearly **0% speed degradation** from 10% context fill (13k tokens) all the way to 100% context fill (128k tokens)!
 
 ### 5. Radix-Tree Prefix Caching (RadixAttention) vs. Redundant Prefill Tax
@@ -172,6 +173,7 @@ Here is exactly how **Sandwich.cpp** changes the game:
 | **`Command-R-35B`** | 35B Enterprise Dense (RAG engine) | **128k (131k)** | `turbo2` | **3.8 t/s** | **2.5 t/s** | **-7.9%** | `--sandwich-auto -ctk turbo2 -ctv turbo2 --split-kv` |
 | **`Llama-3.3-70B-Instruct`** | 70B Dense Giant (80 layers) | **128k (131k)** | `turbo2` | **1.84 t/s** | **1.08 t/s** | **-5.6%** | `--sandwich-auto -ctk turbo2 --split-kv -md Llama-1B.gguf` |
 | **`GPT-OSS-120B`** | **117B MoE (12B active / 128 exp)** | **128k (131k)** | `turbo2` | **1.52 t/s** | **1.02 t/s** | **-7.9%** | `--moe-3tier --moe-2q --moe-warm-ram-mb 12288 -ctk turbo2` |
+| **`Qwen3.8-Flash-Next`** | **125B MoE (10B active / 512 exp)** | **32k (128k)** | `turbo4 / turbo4` | **2.4 t/s** | **0.30 t/s** | **FLAT** | `--sandwich-auto -fitt 1200 -ctk turbo4 -ctv turbo4` |
 
 > 💡 **Notice the MoE Flatline Curves:** Fine-grained MoE models (**GLM-4.7-Flash**, **Qwen 35B**, **Nemotron 30B**) experience virtually **ZERO decoding slowdown** between 13k context and 128k context (1.3% to 3.7% decay). You get full 128k book-length context at the same speed as a 4k short chat!
 
@@ -199,6 +201,9 @@ The installer puts a turbocharged `sandwich` dispatcher straight into your `$PAT
 
 | Command | What it actually does (No Cap) | The Vibe |
 | :--- | :--- | :--- |
+| **`sandwich`** (no args) | Launches the **Smart-Dispatch & Auto-Tuning Interactive TUI Wizard** (raw ANSI, zero-lag model picker, drafter pairing, live VRAM meter). | Interactive bare-metal Wizard |
+| **`sandwich --tune`** | Performs a 1-second bare-metal sweep of CPU P-cores, RAM 70% rule, and Wayland VRAM Guard. | Instant hardware diagnostic |
+| **`sandwich --scan-models`** | Scans local filesystem for GGUF models and speculative drafters into persistent high-speed JSON cache. | Asset catalog refresh |
 | **`sandwich run -m model.gguf`** | Fires up local inference with `--sandwich-auto`. Auto-detects MoE vs. Dense, solves VRAM slabs, and blasts tokens at 35+ t/s. | Quick chat / testing |
 | **`sandwich serve -m model.gguf`** | Spawns an OpenAI-compatible REST API & streaming SSE server on `:8080`. | Drop-in for any frontend |
 | **`sandwich agent -m model.gguf`** | **The Coding Agent Supercharger.** Launches on `:8081` with 64k context, `turbo4`, and Technique #45 Radix-Tree prefix cache (0.05s TTFT!). | Cursor, Claude Code, OpenCode |
