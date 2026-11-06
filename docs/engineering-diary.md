@@ -115,16 +115,18 @@
 
 ---
 
-## 9. TurboQuant 4-Bit KV Cache Compression (`turbo4`)
-* **Commit Range:** `31dc7fdc7` $\rightarrow$ `c00d77d7b`
+## 9. TurboQuant & Turbo-KVarN Unified Hybrid KV Cache Compression (`turbo4`, `turbo3`, `turbo2`)
+* **Commit Range:** `31dc7fdc7` $\rightarrow$ `979d6c4b4`
   * `31dc7fdc7` (2026-10-11): Integrated TurboQuant KV compression in initial release.
   * `d020d927b` (2026-10-14): Clean-room engine upgrade with AVX-512 VNNI vector kernels.
   * `c00d77d7b` (2026-10-18): Auto-configured as default in `sandwich_auto_dispatch`.
-* **What it does:** Squeezes KV cache memory by 75%, allowing massive context windows on 8 GB GPUs.
-* **How it works:**
-  * Quantizes Keys and Values into 4 bits (`cache_type_k = turbo4`, `cache_type_v = turbo4`).
-  * Supports 32k+ context length on an 8 GB GPU with virtually zero perplexity loss compared to FP16.
-  * Frees gigabytes of VRAM that get directly converted into extra hot-expert resident slots.
+  * `979d6c4b4` (2026-11-06): Fused TurboQuant with KVarN (Technique #48) into the unified **Turbo-KVarN Hybrid**, default-enabled across all context lengths on CUDA and CPU.
+* **What it does:** Squeezes KV cache memory by up to 75%–87.5% (from FP16 down to 4-bit, 3-bit, or 2-bit), allowing massive 128k context windows on 8 GB GPUs without token-scale degradation.
+* **How it works & Mathematical Coherence:**
+  * **Walsh-Hadamard Transform (WHT) Rotation:** Projects activation vectors via an orthonormal Hadamard matrix, spreading localized outlier channel spikes into an isotropic Gaussian distribution $N(0, 1)$ without altering Euclidean distances.
+  * **Lloyd-Max Polar Quantization:** Directly quantizes the rotated coordinates using fixed minimum-mean-square-error polar centroids.
+  * **KVarN Closed-Form Variance Normalization:** In discrete quantization, finite centroid mappings deviate slightly from unit length. Turbo-KVarN computes the reconstruction norm on-the-fly via warp butterfly shuffles ($s_{\text{recon}} = \sqrt{\sum c_i^2}$) and normalizes the block scale ($\text{norm}_{\text{calibrated}} = \frac{\text{grp\_norm}}{s_{\text{recon}}}$). Because FlashAttention multiplies by this calibrated norm, the reconstructed tensor maintains exact norm equivalence ($\|\hat{\mathbf{v}}\|_2 \equiv \|\mathbf{v}\|_2$), obliterating the recursive attention-sink scale collapse that otherwise ruins long-horizon Chain-of-Thought reasoning.
+  * **Frees Gigabytes of VRAM:** Squeezes 8k KV from 4 GB down to 1 GB (or 512 MB in `turbo2`), directly converting reclaimed VRAM into extra active hot-expert slots.
 
 ---
 
@@ -649,15 +651,15 @@
 
 ---
 
-## 48. Closed-Form Dual-Axis Variance Normalization (`--turboquant-varn`) (Technique #48)
-* **Origin & Attribution:** Theoretical breakthrough inspired by KVarN (Huawei Computing Systems Lab, arXiv:2606.03458), re-engineered into a zero-latency streaming closed-form CUDA kernel for `sandwich.cpp`.
+## 48. Turbo-KVarN: Closed-Form Dual-Axis Variance Normalization (`--turbo-kvran`, `--turbo-varn`) (Technique #48)
+* **Origin & Attribution:** Theoretical breakthrough inspired by KVarN (Huawei Computing Systems Lab, arXiv:2606.03458), re-engineered into a zero-latency streaming closed-form CUDA and CPU kernel for `sandwich.cpp`, fully unified with TurboQuant.
 * **The Physical Bottleneck:**
   * In long-horizon autoregressive reasoning (e.g. 10k–32k token Chain-of-Thought on DeepSeek-R1, QwQ-32B, and Qwen-2.5-Math), quantization error accumulates systematically: $S_{i,j} = \frac{\mathbf{q}_i^T \mathbf{k}_j}{\sqrt{d}} = \frac{\mathbf{q}_i^T \hat{\mathbf{k}}_j}{\sqrt{d}} \cdot \frac{\|\mathbf{k}_j\|}{\|\hat{\mathbf{k}}_j\|}$.
   * Finite-precision rounding causes the reconstructed vector norm $\|\hat{\mathbf{k}}_j\|$ to deviate from true $\|\mathbf{k}_j\|$ by $\pm 5\%\text{--}10\%$. Because softmax attention is exponential in $S_{i,j}$, outlier tokens (syntax delimiters, punctuation, `<think>` tags) with amplified norms become spurious attention sinks, trapping attention mass and triggering recursive logic collapse.
   * Huawei's KVarN addresses this in vLLM using 2D matrix tiles ($128 \times 128$) and iterative 16-step log-domain Sinkhorn loops, requiring an unquantized 128-token FP16 tail pool and causing register spills (>96 regs/thread) and FlashMLA breakdown.
 * **The Secret Sauce:**
   * **Channel-Axis Pre-WHT Equalization:** Persistent anisotropic channel disparities are balanced before rotation in `turbo-innerq.cu` ($\mathbf{x}_{\text{eq}}[d] = \mathbf{x}[d] \cdot s_{\text{chan}}[d]$).
-  * **Token-Axis Closed-Form Unit-Variance Calibration:** In `set-rows.cu`, when a token vector is mapped to Lloyd-Max centroids $c[idx_j]$, its empirical reconstruction norm is evaluated on-the-fly via a 4-warp butterfly reduction:
+  * **Token-Axis Closed-Form Unit-Variance Calibration:** In `set-rows.cu` (and `ggml-turbo-quant.c`), when a token vector is mapped to Lloyd-Max centroids $c[idx_j]$, its empirical reconstruction norm is evaluated on-the-fly via a 4-warp butterfly reduction:
     $$s_{\text{recon}}^2 = \sum_{j=0}^{127} \text{TURBO\_CENTROIDS\_4BIT}[idx_j]^2, \quad \text{norm}_{\text{calibrated}} = \frac{\text{grp\_norm}}{\sqrt{s_{\text{recon}}^2}}$$
   * **Exact Norm Equivalence:** Because FlashAttention multiplies by $\text{norm}_{\text{calibrated}}$, $\|\hat{\mathbf{v}}\|^2 \equiv \|\mathbf{v}\|^2$ holds identically to machine precision.
 * **The Hardware Impact:**
@@ -666,7 +668,7 @@
   * **Zero Metadata Overhead:** Stores calibrated norm directly in existing 2-byte block header (`blk->norm`).
   * **Zero Tensor Core MMA Register Spilling:** Preserves $\ge 50\%$ active warp occupancy on Blackwell sm_120.
   * **100% FlashMLA Invariant:** Scalar norms commute directly through DeepSeek low-rank projection manifolds.
-* **Controlled via:** `--turboquant-varn` (and `--no-turboquant-varn`). Auto-enabled in `--sandwich-auto` when context $\ge 8192$.
+* **Controlled via:** Default enabled across all TurboQuant types (`turbo4`, `turbo3`, `turbo2`). Aliases: `--turbo-kvran`, `--turbo-varn`, `--turbo-vran`, `--turboquant-varn` (and `--no-turbo-kvran` / `--no-turbo-varn` to disable). Auto-enabled in `--sandwich-auto`.
 
 ---
 

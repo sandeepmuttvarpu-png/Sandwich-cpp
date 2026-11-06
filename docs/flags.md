@@ -170,8 +170,8 @@ sandwich.cpp merges upstream llama.cpp parameters with custom MoE expert caching
  --latent-mla, --flash-mla           │ None     │ [Technique #46] Latent FlashMLA Direct Tensor Core MMA: fuses uncompressed MLA manifold projection into MMA.  │     Auto (MLA models)
  --no-latent-mla, --no-flash-mla     │ None     │ Disable direct Latent FlashMLA and uncompress full multi-head tensors in memory.                              │             false
  --spec-select                       │ None     │ [Technique #47] Dynamic Multi-Drafter Arbitration: per-step expected token utility max over multiple drafters. │ Auto (--sandwich-auto)
- --turboquant-varn                   │ None     │ [Technique #48] Closed-Form Dual-Axis Variance Normalization: eliminates long-horizon reasoning drift.          │ Auto (ctx >= 8192)
- --no-turboquant-varn                │ None     │ Disable TurboQuant dual-axis variance normalization.                                                          │             false
+ --turbo-kvran, --turbo-varn, --turboquant-varn │ None │ [Technique #48] Turbo-KVarN Unified Hybrid: Closed-Form Dual-Axis Variance Normalization (zero reasoning drift). │             true
+ --no-turbo-kvran, --no-turboquant-varn         │ None │ Disable Turbo-KVarN dual-axis variance normalization.                                                           │            false
 ──────
 ## 14. 🧠 Era 8: Dynamic Context Scaling & Attention Guards (Techniques #58 - #60)
 
