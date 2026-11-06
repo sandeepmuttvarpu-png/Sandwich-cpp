@@ -53,6 +53,7 @@ struct llama_cparams {
     bool fused_dsv4_hc_post;
     bool auto_fhc;
     bool moe_3tier;
+    int32_t io_uring_qd = 128; // Dynamic Expert Shard Paging queue depth (default: 128)
     bool moe_2q;
     bool moe_gds;
     bool latent_mla;

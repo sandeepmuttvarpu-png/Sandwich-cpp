@@ -171,6 +171,7 @@ struct llama_moe_cache::impl {
     struct moe_3tier_engine {
         bool enabled = false;
         bool uring_active = false;
+        int32_t ring_depth = 128; // Dynamic Expert Shard Paging queue depth
 #ifdef GGML_USE_IO_URING
         struct io_uring ring;
 #endif
@@ -348,10 +349,17 @@ struct llama_moe_cache::impl {
 
 #ifdef GGML_USE_IO_URING
             if (uring_active) {
+                // Reap any already-completed async lookahead CQEs first
+                struct io_uring_cqe * cqe_reap = nullptr;
+                while (io_uring_peek_cqe(&ring, &cqe_reap) == 0 && cqe_reap) {
+                    io_uring_cqe_seen(&ring, cqe_reap);
+                    cqe_reap = nullptr;
+                }
+
                 size_t op_idx = 0;
                 while (op_idx < cold_reads.size()) {
                     size_t batch_count = 0;
-                    while (op_idx + batch_count < cold_reads.size() && batch_count < 64) {
+                    while (op_idx + batch_count < cold_reads.size() && batch_count < (size_t)ring_depth) {
                         const auto & op = cold_reads[op_idx + batch_count];
                         if (op.fd >= 0) {
                             struct io_uring_sqe * sqe = io_uring_get_sqe(&ring);
@@ -431,6 +439,69 @@ struct llama_moe_cache::impl {
                 total_cold_bytes += op.len;
             }
         }
+
+        void prefetch_lookahead_warm_layer(const llama_model & model, const layer & l, int32_t il, const int32_t * candidate_ids, size_t n_ids) {
+            if (!enabled || !uring_active || n_warm_slots <= 0 || !candidate_ids || n_ids == 0) return;
+            if (il < 0 || (size_t)il >= locators.size()) return;
+
+            std::vector<read_op> async_reads;
+            for (size_t i = 0; i < n_ids; ++i) {
+                int32_t e = candidate_ids[i];
+                if (e < 0 || (size_t)e >= locators[il].size()) continue;
+
+                auto & loc = locators[il][e];
+                if (loc.ram_ptr != nullptr && loc.warm_slot >= 0) continue;
+
+                int32_t s = alloc_warm_slot(il, e);
+                if (s < 0) break;
+
+                uint8_t * slot_mem = (uint8_t *)pool_mem + (size_t)s * slot_stride;
+                loc.warm_slot = s;
+                loc.ram_ptr   = slot_mem;
+                loc.tier      = moe_tier_level::TIER_WARM_RAM;
+                tier3_cold_fetches++;
+
+                for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+                    const ggml_tensor * w = l.experts[ip];
+                    const size_t tensor_len = w->nb[2];
+                    const size_t tensor_off = group_tensor_offsets[l.ig][ip];
+                    uint8_t * dst_ptr = slot_mem + tensor_off;
+                    const void * src_ptr = (const uint8_t *)w->data + e * tensor_len;
+
+                    int fd = -1;
+                    size_t file_offset = 0;
+                    if (!model.get_mmap_info(src_ptr, fd, file_offset)) {
+                        fd = model.get_mmap_fd();
+                        const uint8_t * mmap_addr = (const uint8_t *)model.get_mmap_addr();
+                        if (mmap_addr && (const uint8_t *)src_ptr >= mmap_addr) {
+                            file_offset = (const uint8_t *)src_ptr - mmap_addr;
+                        } else {
+                            fd = -1;
+                        }
+                    }
+                    async_reads.push_back({ fd, dst_ptr, tensor_len, file_offset, src_ptr });
+                }
+            }
+
+            if (async_reads.empty()) return;
+
+#ifdef GGML_USE_IO_URING
+            size_t batch_count = 0;
+            for (size_t b = 0; b < async_reads.size() && batch_count < (size_t)ring_depth; ++b) {
+                const auto & op = async_reads[b];
+                if (op.fd >= 0) {
+                    struct io_uring_sqe * sqe = io_uring_get_sqe(&ring);
+                    if (!sqe) break;
+                    io_uring_prep_read(sqe, op.fd, op.dst, op.len, op.offset);
+                    io_uring_sqe_set_data(sqe, (void *)(uintptr_t)0x5A5A);
+                    batch_count++;
+                }
+            }
+            if (batch_count > 0) {
+                io_uring_submit(&ring);
+            }
+#endif
+        }
     } tier_engine;
 
     // slot maps in host memory
@@ -445,7 +516,7 @@ struct llama_moe_cache::impl {
     bool disjoint_guard = true;
     bool exchange_rot   = true;
 
-    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier, bool moe_2q, bool dma_batch = true, bool disjoint_guard = true, bool exchange_rot = true) :
+    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, size_t warm_ram_bytes, bool moe_3tier, bool moe_2q, bool dma_batch = true, bool disjoint_guard = true, bool exchange_rot = true, int32_t io_uring_qd = 128) :
             model(&model), n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()),
             dma_batch(dma_batch), disjoint_guard(disjoint_guard), exchange_rot(exchange_rot) {
         for (size_t i = 0; i < backends.size(); ++i) {
@@ -767,11 +838,17 @@ struct llama_moe_cache::impl {
                 }
 
 #ifdef GGML_USE_IO_URING
-                int ret = io_uring_queue_init(64, &tier_engine.ring, 0);
+                int ring_depth = (io_uring_qd > 0) ? io_uring_qd : 128;
+                const char * env_qd = std::getenv("SANDWICH_IO_URING_QD");
+                if (env_qd && std::atoi(env_qd) > 0) {
+                    ring_depth = std::atoi(env_qd);
+                }
+                tier_engine.ring_depth = ring_depth;
+                int ret = io_uring_queue_init(ring_depth, &tier_engine.ring, 0);
                 if (ret == 0) {
                     tier_engine.uring_active = true;
                     int mmap_fd = model.get_mmap_fd();
-                    LLAMA_LOG_INFO("%s: Tier 3 io_uring DMA initialized (depth 64, fd %d)\n", __func__, mmap_fd);
+                    LLAMA_LOG_INFO("%s: Tier 3 io_uring DMA initialized (depth %d, fd %d)\n", __func__, ring_depth, mmap_fd);
                 } else {
                     LLAMA_LOG_WARN("%s: io_uring_queue_init failed (%d): falling back to pread\n", __func__, ret);
                 }
@@ -1003,6 +1080,9 @@ struct llama_moe_cache::impl {
         if (ggml_moe_prefetch_enabled()) {
             ggml_moe_prefetch_lookahead_step(il, ids.data(), ids.size());
         }
+        if (tier_engine.enabled && (size_t)(il + 1) < layers.size()) {
+            tier_engine.prefetch_lookahead_warm_layer(*model, layers[il + 1], il + 1, ids.data(), ids.size());
+        }
 
         stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
         st.hits   += n_hit;
@@ -1090,8 +1170,9 @@ llama_moe_cache::llama_moe_cache(const llama_model & model,
                                  bool   moe_2q,
                                  bool   dma_batch,
                                  bool   disjoint_guard,
-                                 bool   exchange_rot) :
-    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier, moe_2q, dma_batch, disjoint_guard, exchange_rot)) {
+                                 bool   exchange_rot,
+                                 int32_t io_uring_qd) :
+    pimpl(new impl(model, backends, bufts, size, warm_ram_bytes, moe_3tier, moe_2q, dma_batch, disjoint_guard, exchange_rot, io_uring_qd)) {
 }
 
 llama_moe_cache::~llama_moe_cache() = default;

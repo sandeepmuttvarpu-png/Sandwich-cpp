@@ -1915,6 +1915,43 @@ void sandwich_auto_dispatch(common_params & params) {
                 }
             }
         }
+
+        std::string drafter_path = params.speculative.draft.mparams.path;
+        bool drafter_found = !drafter_path.empty();
+
+        if (!drafter_found) {
+            drafter_path = sandwich_find_compatible_drafter(params.model.path, model_arch, vocab_size, embedding_length, tok_model);
+            if (!drafter_path.empty()) {
+                drafter_found = true;
+            }
+        }
+
+        if (drafter_found) {
+            auto detected_types = common_speculative_types_from_gguf(drafter_path);
+            const bool is_mtp = !detected_types.empty() && detected_types[0] == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+            LOG_INF("   -> [Technique #26] Active MoE Speculative Drafter: %s (%s)\n",
+                    is_mtp ? "NATIVE MTP EMBEDDED DRAFTER" : "EXT-MODEL SPECULATIVE DRAFTER",
+                    drafter_path.c_str());
+
+            if (!detected_types.empty()) {
+                params.speculative.types = detected_types;
+            } else {
+                params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+            }
+            params.speculative.draft.mparams.path = drafter_path;
+            if (params.speculative.draft.n_gpu_layers < 0) {
+                params.speculative.draft.n_gpu_layers = 99; // 100% in GPU VRAM
+            }
+            if (params.speculative.draft.n_max <= 0) {
+                params.speculative.draft.n_max = is_mtp ? 1 : 5;
+            }
+            if (params.speculative.draft.p_min <= 0.0f) {
+                params.speculative.draft.p_min = 0.75f;
+            }
+            params.speculative.draft.cache_type_k = GGML_TYPE_TURBO4_0;
+            params.speculative.draft.cache_type_v = GGML_TYPE_TURBO4_0;
+        }
+
         params.sched_async_cpu = true; // Overlap CPU cold-expert and GPU hot-expert computation
     } else {
         // Dense Model Handling: Strictly bypass Phase 5 & 6 MoE optimizations to preserve 100% stability and TurboQuant efficiency
@@ -2871,6 +2908,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.moe_cache_size     = params.moe_cache_size;
     cparams.moe_warm_ram_bytes = (size_t) params.moe_warm_ram_mb * 1024 * 1024;
     cparams.moe_3tier          = params.moe_3tier;
+    cparams.io_uring_qd        = params.io_uring_qd;
     cparams.moe_2q             = params.moe_2q;
     cparams.moe_mass_thresh    = params.moe_mass_thresh;
     cparams.moe_gds            = params.moe_gds;

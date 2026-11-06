@@ -642,6 +642,7 @@ struct common_params {
     bool        turbo_mma                  = false; // [Technique #38] Fused TurboQuant MMA Tensor Core FlashAttention
     bool        turboquant_varn            = true;  // [Turbo-KVarN Hybrid] Closed-Form Dual-Axis Variance Normalization (Technique #48/#54)
     bool        moe_3tier                  = true;  // Phase 12: 3-Tier Hierarchical MoE Memory System (HOT VRAM -> WARM DDR5 -> COLD NVMe)
+    int32_t     io_uring_qd                = 128;   // Phase 12: Dynamic Expert Shard Paging io_uring queue depth (default: 128)
     bool        moe_2q                     = true;  // Phase 12: 2Q & Ghost-Cache Replacement Policy (default: true)
     int32_t     moe_warm_ram_mb            = 14336; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in MiB (default: 14336)
 

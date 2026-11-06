@@ -30,15 +30,15 @@ shift 2 2>/dev/null || shift $# 2>/dev/null || true
 
 echo ">> Model Shards : Shard 1 (47.3 GB) & Shard 2 (28.8 GB)"
 if [ -f "${MTP_DRAFTER}" ]; then
-    echo ">> Spec Drafter : ${MTP_DRAFTER} (Host RAM Pinned, -ngld 0)"
-    DRAFT_ARG="-md ${MTP_DRAFTER} -ngld 0"
+    echo ">> Spec Drafter : ${MTP_DRAFTER} (Native GPU MTP Head Decoding, -ngld 99)"
+    DRAFT_ARG="-md ${MTP_DRAFTER} -ngld 99"
 else
     echo ">> Spec Drafter : Disabled"
     DRAFT_ARG=""
 fi
 echo ">> VRAM Fit     : Target margin 1200 MiB (Strict 7,100 MB Wayland VRAM Guard)"
 echo ">> KV Cache     : Turbo-KVarN Unified 4-Bit (turbo4 + closed-form unit-variance)"
-echo ">> MoE Streaming: 3-Tier io_uring direct NVMe + 2Q Ghost Cache (14GB DDR5 pool)"
+echo ">> MoE Streaming: 3-Tier io_uring direct NVMe (depth 128) + 2Q Ghost Cache (14GB DDR5 pool)"
 echo ">> Strata Assim.: Batched PCIe DMA, pointer rotation, disjoint guard"
 echo "======================================================================"
 
@@ -52,6 +52,9 @@ exec "${CLI_BIN}" \
     --moe-disjoint-guard \
     --moe-2q \
     --io-uring \
+    --io-uring-qd 128 \
+    --perf \
+    --single-turn \
     -fitt 1200 \
     -ctk turbo4 -ctv turbo4 \
     -fa on \

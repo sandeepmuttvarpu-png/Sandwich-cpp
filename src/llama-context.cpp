@@ -133,6 +133,7 @@ llama_context::llama_context(
     cparams.sched_async_cpu         = params.sched_async_cpu;
     cparams.moe_hot_only            = params.moe_hot_only;
     cparams.moe_3tier               = params.moe_3tier;
+    cparams.io_uring_qd             = params.io_uring_qd;
     cparams.moe_2q                  = params.moe_2q;
     cparams.moe_gds                 = params.moe_gds;
     cparams.latent_mla              = params.latent_mla;
@@ -318,6 +319,7 @@ llama_context::llama_context(
     cparams.moe_cache_size     = params.moe_cache_size;
     cparams.moe_warm_ram_bytes = params.moe_warm_ram_bytes;
     cparams.moe_3tier          = params.moe_3tier;
+    cparams.io_uring_qd        = params.io_uring_qd;
     cparams.moe_2q             = params.moe_2q;
     cparams.moe_gds            = params.moe_gds;
     cparams.latent_mla         = params.latent_mla;
@@ -559,7 +561,8 @@ llama_context::llama_context(
             moe_cache = std::make_unique<llama_moe_cache>(
                 model, backend_ptrs, backend_buft, vram_cache_sz,
                 cparams.moe_warm_ram_bytes, cparams.moe_3tier, cparams.moe_2q,
-                cparams.dma_batch, cparams.moe_disjoint_guard, cparams.moe_exchange_rot);
+                cparams.dma_batch, cparams.moe_disjoint_guard, cparams.moe_exchange_rot,
+                cparams.io_uring_qd);
         }
 
         sched_reserve();
@@ -4339,6 +4342,7 @@ llama_context_params llama_context_default_params() {
         /*.sched_async_cpu             =*/ true,
         /*.moe_hot_only                =*/ false,
         /*.moe_3tier                   =*/ true,
+        /*.io_uring_qd                 =*/ 128,
         /*.moe_2q                      =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,

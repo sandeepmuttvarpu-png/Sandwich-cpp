@@ -2908,6 +2908,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_IO_BATCH_SIZE"));
     add_opt(common_arg(
+        {"--io-uring-qd"}, "N",
+        "io_uring queue depth for 3-tier MoE expert shard paging (default: 128, range: 32-512)",
+        [](common_params & params, int value) {
+            params.io_uring_qd = value;
+            setenv("SANDWICH_IO_URING_QD", std::to_string(value).c_str(), 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_IO_URING_QD"));
+    add_opt(common_arg(
         {"--moe-2q", "--moe-2q-cache"},
         "enable Phase 12 2Q & Ghost-Cache replacement policy (A1in probation + Am frequent + A1out ghost) (default: enabled)",
         [](common_params & params) {

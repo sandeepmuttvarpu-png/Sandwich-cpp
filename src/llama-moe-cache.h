@@ -38,7 +38,8 @@ public:
                     bool   moe_2q = true,
                     bool   dma_batch = true,
                     bool   disjoint_guard = true,
-                    bool   exchange_rot = true);
+                    bool   exchange_rot = true,
+                    int32_t io_uring_qd = 128);
     ~llama_moe_cache();
 
     // the device that caches layer il
