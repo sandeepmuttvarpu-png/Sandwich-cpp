@@ -484,7 +484,7 @@ void TUIWizard::recompute_tiering_and_command() {
 }
 
 void TUIWizard::save_preset() {
-    std::string preset_dir = std::string(getenv("HOME") ? getenv("HOME") : ".") + "/.config/sandwich/presets";
+    std::string preset_dir = HardwareProfiler::get_config_dir() + "/presets";
     fs::create_directories(preset_dir);
     std::string out_path = preset_dir + "/latest.json";
 

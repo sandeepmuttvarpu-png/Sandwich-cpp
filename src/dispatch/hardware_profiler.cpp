@@ -26,7 +26,7 @@ using json = nlohmann::json;
 namespace sandwich {
 namespace dispatch {
 
-static std::string get_config_dir() {
+std::string HardwareProfiler::get_config_dir() {
     const char * home = std::getenv("HOME");
     if (!home) {
         home = "/tmp";
@@ -295,63 +295,21 @@ CPUProfile HardwareProfiler::detect_cpu() {
 
 RAMProfile HardwareProfiler::detect_ram() {
     RAMProfile ram;
-
-    std::ifstream f("/proc/meminfo");
-    if (f.is_open()) {
-        std::string line;
-        while (std::getline(f, line)) {
-            if (line.rfind("MemTotal:", 0) == 0) {
-                std::istringstream iss(line.substr(9));
-                uint64_t kb = 0;
-                if (iss >> kb) {
-                    ram.total_mb = kb / 1024;
-                }
-            } else if (line.rfind("MemAvailable:", 0) == 0) {
-                std::istringstream iss(line.substr(13));
-                uint64_t kb = 0;
-                if (iss >> kb) {
-                    ram.available_mb = kb / 1024;
-                }
-            }
-        }
-    }
-
-    // Technique #42: Enforce 70% Max Host RAM Rule
+    RealtimeRAMStats s = RAMEstimator::sample_realtime_ram();
+    ram.total_mb = s.total_mb;
+    ram.available_mb = s.available_mb;
     ram.max_safe_allocation_mb = static_cast<uint64_t>(ram.total_mb * RAM_RULE_42_RATIO);
     ram.est_bandwidth_gbps = 64.0; // Typical DDR5 4800/5600 MT/s dual-channel
-
     return ram;
 }
 
 GPUProfile HardwareProfiler::detect_gpu() {
     GPUProfile gpu;
-
-    // Use fast popen to query nvidia-smi with nounits
-    FILE * pipe = popen("nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null", "r");
-    if (pipe) {
-        char buf[256];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            std::string line(buf);
-            // format: name, total, free
-            auto comma1 = line.find(',');
-            if (comma1 != std::string::npos) {
-                gpu.device_name = line.substr(0, comma1);
-                // trim
-                while (!gpu.device_name.empty() && (gpu.device_name.front() == ' ' || gpu.device_name.front() == '\t')) gpu.device_name.erase(0, 1);
-                while (!gpu.device_name.empty() && (gpu.device_name.back() == ' ' || gpu.device_name.back() == '\t' || gpu.device_name.back() == '\n' || gpu.device_name.back() == '\r')) gpu.device_name.pop_back();
-
-                auto comma2 = line.find(',', comma1 + 1);
-                if (comma2 != std::string::npos) {
-                    std::string total_str = line.substr(comma1 + 1, comma2 - comma1 - 1);
-                    std::string free_str = line.substr(comma2 + 1);
-                    gpu.total_vram_mb = std::strtoull(total_str.c_str(), nullptr, 10);
-                    gpu.free_vram_mb = std::strtoull(free_str.c_str(), nullptr, 10);
-                    gpu.cuda_available = true;
-                }
-            }
-        }
-        pclose(pipe);
-    }
+    RealtimeVRAMStats s = RAMEstimator::sample_realtime_vram();
+    gpu.cuda_available = s.cuda_available;
+    gpu.device_name    = s.device_name;
+    gpu.total_vram_mb  = s.total_mb;
+    gpu.free_vram_mb   = s.free_mb;
 
     // Invariant: 7,100 MB Wayland VRAM Guard
     // Leaves desktop compositor buffer and guarantees zero CUDA OOM errors

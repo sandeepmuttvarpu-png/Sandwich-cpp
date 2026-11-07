@@ -82,6 +82,7 @@ struct TieringPlan {
 
 class HardwareProfiler {
 public:
+    static std::string get_config_dir();
     static bool profile_exists();
     static std::string get_profile_path();
     static std::string get_flag_path();

@@ -1,4 +1,5 @@
 #include "model_scanner.hpp"
+#include "hardware_profiler.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -20,19 +21,8 @@ using json = nlohmann::json;
 namespace sandwich {
 namespace dispatch {
 
-static std::string get_config_dir() {
-    const char * home = std::getenv("HOME");
-    if (!home) {
-        home = "/tmp";
-    }
-    fs::path config_dir = fs::path(home) / ".config" / "sandwich";
-    std::error_code ec;
-    fs::create_directories(config_dir, ec);
-    return config_dir.string();
-}
-
 std::string ModelScanner::get_cache_path() {
-    return (fs::path(get_config_dir()) / "model_cache.json").string();
+    return (fs::path(HardwareProfiler::get_config_dir()) / "model_cache.json").string();
 }
 
 bool ModelScanner::cache_exists() {
