@@ -1730,7 +1730,6 @@ void sandwich_auto_dispatch(common_params & params) {
     uint64_t kv_bytes_turbo4 = (uint64_t)(kv_elems_per_token * (double)ctx_eval * 0.5);
     uint64_t kv_bytes_turbo3 = (uint64_t)(kv_elems_per_token * (double)ctx_eval * 0.375);
     uint64_t kv_bytes_turbo2 = (uint64_t)(kv_elems_per_token * (double)ctx_eval * 0.25);
-    uint64_t kv_bytes_f16    = (uint64_t)(kv_elems_per_token * (double)ctx_eval * 2.0);
 
     int64_t kv_turbo4_mb = (int64_t)(kv_bytes_turbo4 / (1024ULL * 1024ULL));
     int64_t kv_turbo3_mb = (int64_t)(kv_bytes_turbo3 / (1024ULL * 1024ULL));
