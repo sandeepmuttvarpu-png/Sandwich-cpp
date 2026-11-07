@@ -28,13 +28,13 @@ namespace dispatch {
 // ANSI Theme Color Palette
 static const char * CLR_RESET      = "\033[0m";
 static const char * CLR_BOLD       = "\033[1m";
-static const char * CLR_GOLD       = "\033[1;38;2;229;169;59m";  // Sandwich Gold
-static const char * CLR_LIGHT_YEL  = "\033[1;38;2;254;240;138m"; // Bright highlight yellow
+static const char * CLR_GOLD       = "\033[1;38;2;229;169;59m";  // Sandwich Gold (#E5A93B)
+static const char * CLR_LIGHT_YEL  = "\033[1;38;2;254;240;138m"; // Bright highlight yellow (#FEF08A)
 static const char * CLR_CYAN       = "\033[1;38;2;78;201;176m";
 static const char * CLR_GREEN      = "\033[1;38;2;34;197;94m";
 static const char * CLR_RED        = "\033[1;38;2;239;68;68m";
-static const char * CLR_GRAY       = "\033[38;2;140;140;140m";
-static const char * CLR_DARK_GRAY  = "\033[38;2;80;80;80m";
+static const char * CLR_GRAY       = "\033[38;2;156;163;175m";   // Tailwind Gray-400
+static const char * CLR_DARK_GRAY  = "\033[38;2;75;85;99m";     // Tailwind Gray-600
 static const char * BG_GOLD        = "\033[48;2;229;169;59m\033[30m\033[1m";
 static const char * BG_YEL         = "\033[48;2;254;240;138m\033[30m\033[1m";
 
@@ -46,28 +46,78 @@ static std::string repeat_utf8(const std::string & s, int count) {
     return res;
 }
 
-// Global pointer for clean terminal restoration
+std::atomic<bool> TUIWizard::s_sigwinch_received{false};
 static TUIWizard * g_active_wizard = nullptr;
 
 static void global_signal_handler(int sig) {
+    if (sig == SIGWINCH) {
+        TUIWizard::on_terminal_resize();
+        return;
+    }
     if (g_active_wizard) {
         std::cout << "\033[?1049l\033[?25h\033[0m" << std::flush;
     }
     std::exit(128 + sig);
 }
 
+void TUIWizard::on_terminal_resize() {
+    s_sigwinch_received.store(true);
+}
+
+std::string TUIWizard::smart_truncate(const std::string & text, size_t max_len) {
+    if (text.size() <= max_len) return text;
+    if (max_len < 7) return text.substr(0, max_len);
+
+    // If text ends with an extension like .gguf, preserve it
+    std::string ext = "";
+    std::string base = text;
+    size_t dot_pos = text.rfind('.');
+    if (dot_pos != std::string::npos && text.size() - dot_pos <= 6) {
+        ext = text.substr(dot_pos);
+        base = text.substr(0, dot_pos);
+    }
+
+    size_t prefix_len = (max_len - ext.size() - 2) / 2;
+    size_t suffix_len = (max_len - ext.size() - 2) - prefix_len;
+
+    if (prefix_len + suffix_len + ext.size() + 2 > max_len) {
+        return text.substr(0, max_len - 2) + "..";
+    }
+
+    std::string res = base.substr(0, prefix_len) + ".." +
+                      base.substr(base.size() - suffix_len) + ext;
+    return res;
+}
+
+std::string TUIWizard::format_progress_bar(float fraction, int bar_width, const char * fill_clr) {
+    if (fraction < 0.0f) fraction = 0.0f;
+    if (fraction > 1.0f) fraction = 1.0f;
+    int filled = static_cast<int>(fraction * bar_width);
+    if (filled > bar_width) filled = bar_width;
+    int empty = bar_width - filled;
+
+    std::ostringstream ss;
+    ss << fill_clr;
+    for (int i = 0; i < filled; ++i) ss << "█";
+    ss << CLR_DARK_GRAY;
+    for (int i = 0; i < empty; ++i) ss << "░";
+    ss << CLR_RESET;
+    return ss.str();
+}
+
 TUIWizard::TUIWizard() {
     g_active_wizard = this;
     std::signal(SIGINT, global_signal_handler);
     std::signal(SIGTERM, global_signal_handler);
+    std::signal(SIGWINCH, global_signal_handler);
 
     profile = HardwareProfiler::load_or_profile();
     catalog = ModelScanner::load_or_scan();
 
     update_terminal_size();
 
-    // Default configuration state
-    state.context_length  = 4096;
+    // Default configuration state (64K context default, turbo4 KV quant, all core optimizations active)
+    state.context_length  = 65536;
     state.kv_quant        = "turbo4";
     state.flash_attn      = true;
     state.lock_p_cores    = true;
@@ -79,6 +129,8 @@ TUIWizard::TUIWizard() {
     state.attn_sinks      = false;
     state.split_kv        = false;
     state.spec_tree       = false;
+    state.warm_pool       = true;
+    state.io_uring        = true;
 
     // Default to first model
     if (!catalog.models.empty()) {
@@ -158,7 +210,7 @@ void TUIWizard::log_event(const std::string & msg) {
     std::strftime(time_str, sizeof(time_str), "%H:%M:%S", &tm_buf);
 
     event_logs.push_back("[" + std::string(time_str) + "] " + msg);
-    if (event_logs.size() > 40) {
+    if (event_logs.size() > 50) {
         event_logs.erase(event_logs.begin());
     }
 }
@@ -319,7 +371,7 @@ void TUIWizard::recompute_tiering_and_command() {
     } else {
         int custom_val = std::atoi(context_custom_str.c_str());
         if (custom_val > 0) state.context_length = custom_val;
-        else state.context_length = 131072;
+        else state.context_length = 65536;
     }
 
     // KV Quant resolution
@@ -365,17 +417,22 @@ void TUIWizard::recompute_tiering_and_command() {
     if (state.dynamic_yarn)  cmd << " --dynamic-yarn";
     if (state.attn_sinks)    cmd << " --attn-sinks 4";
     if (state.split_kv)      cmd << " --split-kv";
+    if (state.warm_pool)     cmd << " --warm-pool 18G";
+    if (state.io_uring)      cmd << " --io-uring";
 
     state.synthesized_command = cmd.str();
 
     // Single-line hint update
     switch (active_section) {
         case ActiveSection::MODELS:
-            last_hovered_hint = "Model: " + state.selected_model.display_name + " ──▶ [Enter] Runs Model Now";
+            last_hovered_hint = "Model: " + state.selected_model.display_name + " (" +
+                                (state.selected_model.is_moe ? "MoE" : "Dense") + ", " +
+                                state.selected_model.quantization + ") ──▶ [Enter] Runs Model Now";
             break;
         case ActiveSection::DRAFTERS:
             if (state.use_speculative) {
-                last_hovered_hint = "Speculative Drafter: " + state.selected_drafter.filename + " ──▶ Adds: -md " + state.selected_drafter.filename;
+                last_hovered_hint = "Speculative Drafter: " + state.selected_drafter.filename +
+                                    " (" + std::to_string((int)(state.selected_drafter.size_gb * 1024)) + " MB) ──▶ Adds: -md " + state.selected_drafter.filename;
             } else {
                 last_hovered_hint = "Single-Token Decoding (No drafter) ──▶ [←/→] Browse drafters";
             }
@@ -383,7 +440,7 @@ void TUIWizard::recompute_tiering_and_command() {
         case ActiveSection::CONTEXT_QUANT:
             if (cq_subfocus == 0) {
                 if (context_cursor == 7) {
-                    last_hovered_hint = "Custom Context Window: " + std::to_string(state.context_length) + " ──▶ Type digits or press [Space] to edit";
+                    last_hovered_hint = "Custom Context Window: " + std::to_string(state.context_length) + " ──▶ [Space] Edit custom token limit";
                 } else {
                     last_hovered_hint = "Context Window: " + std::to_string(state.context_length) + " tokens ──▶ Adds: -c " + std::to_string(state.context_length);
                 }
@@ -397,18 +454,20 @@ void TUIWizard::recompute_tiering_and_command() {
             break;
         case ActiveSection::OPTIMIZATION_FLAGS: {
             static const char * flag_descs[] = {
-                "Flash Attention 2: Memory-efficient attention ──▶ Adds: -fa",
+                "Flash Attention 2: Eliminates O(N^2) memory spikes ──▶ Adds: -fa",
                 "Turbo-KVarN Hybrid: 4-bit Polar quantization ──▶ Adds: --turbo-kvran",
                 "Dynamic YaRN: Context retention scaling ──▶ Adds: --dynamic-yarn",
                 "P-Core Affinity: Pin compute to physical cores ──▶ Adds: -t 6",
-                "MoE Row-Split: Expert memory tiering ──▶ Adds: -sm row",
+                "MoE Row-Split: Dynamic expert memory tiering ──▶ Adds: -sm row",
                 "Wayland Guard: 7.1GB VRAM compositor protection ──▶ Adds: -fitt 7100",
                 "Radix Prefix Cache: Multi-turn prompt reuse ──▶ Adds: --radix-cache",
-                "Attention Sinks: Preserve first 4 sink tokens ──▶ Adds: --attn-sinks 4",
-                "EAGLE Spec Tree: Multi-path draft decoding ──▶ Adds: --spec-tree",
-                "Asymmetric Split-KV: Pin KV cache in VRAM ──▶ Adds: --split-kv"
+                "Attention Sinks: Preserves first 4 sink tokens ──▶ Adds: --attn-sinks 4",
+                "EAGLE Spec Tree: Multi-path draft tree decoding ──▶ Adds: --spec-tree",
+                "Asymmetric Split-KV: Pin KV cache in VRAM ──▶ Adds: --split-kv",
+                "WARM DDR5 Pool: 18-20GB zero-trim cache (Rule #42) ──▶ Adds: --warm-pool 18G",
+                "io_uring Direct DMA: Kernel-level async paging ──▶ Adds: --io-uring"
             };
-            if (flags_cursor < 10) last_hovered_hint = flag_descs[flags_cursor];
+            if (flags_cursor < 12) last_hovered_hint = flag_descs[flags_cursor];
             break;
         }
         default:
@@ -436,6 +495,8 @@ void TUIWizard::save_preset() {
     j["attn_sinks"]    = state.attn_sinks;
     j["split_kv"]      = state.split_kv;
     j["spec_tree"]     = state.spec_tree;
+    j["warm_pool"]     = state.warm_pool;
+    j["io_uring"]      = state.io_uring;
     j["command"]       = state.synthesized_command;
 
     std::ofstream ofs(out_path);
@@ -448,16 +509,29 @@ void TUIWizard::save_preset() {
 void TUIWizard::render_dashboard() {
     update_terminal_size();
 
+    // Check minimum dimensions (Floor size guard from TUI design principles)
+    if (term_cols < 80 || term_rows < 22) {
+        std::ostringstream out;
+        out << "\033[2J\033[H\n\n"
+            << CLR_GOLD << "  🥪 SANDWICH.CPP ── SMART-DISPATCH CONSOLE" << CLR_RESET << "\n\n"
+            << CLR_RED  << "  [!] Terminal too small: " << term_cols << "x" << term_rows << CLR_RESET << "\n"
+            << CLR_GRAY << "  Please resize terminal window to at least 80x22 (Current: "
+            << term_cols << " cols, " << term_rows << " rows)." << CLR_RESET << "\n"
+            << CLR_DARK_GRAY << "  Press [Esc] to exit..." << CLR_RESET << "\n";
+        std::cout << out.str() << std::flush;
+        return;
+    }
+
     std::ostringstream out;
     out << "\033[H";
 
     int left_w = static_cast<int>(term_cols * 0.68);
     int right_w = term_cols - left_w - 2;
-    if (left_w < 46) left_w = 46;
-    if (right_w < 24) right_w = 24;
+    if (left_w < 50) left_w = 50;
+    if (right_w < 26) right_w = 26;
 
     int content_h = term_rows - 4;
-    if (content_h < 14) content_h = 14;
+    if (content_h < 15) content_h = 15;
 
     render_header(out);
     render_left_panel(out, 2, 1, left_w, content_h);
@@ -465,20 +539,20 @@ void TUIWizard::render_dashboard() {
     render_footer(out);
 
     if (help_overlay_active) {
-        int box_w = std::min(68, term_cols - 4);
-        int box_h = 15;
+        int box_w = std::min(70, term_cols - 4);
+        int box_h = 16;
         int top = (term_rows - box_h) / 2;
         int left = (term_cols - box_w) / 2;
 
-        out << "\033[" << top << ";" << left << "H" << CLR_GOLD << "╔" << repeat_utf8("═", box_w - 2) << "╗" << CLR_RESET;
-        out << "\033[" << top + 1 << ";" << left << "H" << CLR_GOLD << "║ " << CLR_LIGHT_YEL << "SANDWICH.CPP CONTROLS GUIDE" << std::string(box_w - 30, ' ') << CLR_GOLD << "║" << CLR_RESET;
-        out << "\033[" << top + 2 << ";" << left << "H" << CLR_GOLD << "╠" << repeat_utf8("═", box_w - 2) << "╣" << CLR_RESET;
+        out << "\033[" << top << ";" << left << "H" << CLR_GOLD << "╭" << repeat_utf8("─", box_w - 2) << "╮" << CLR_RESET;
+        out << "\033[" << top + 1 << ";" << left << "H" << CLR_GOLD << "│ " << CLR_LIGHT_YEL << "SANDWICH.CPP CONTROLS & SHORTCUTS GUIDE" << std::string(box_w - 42, ' ') << CLR_GOLD << "│" << CLR_RESET;
+        out << "\033[" << top + 2 << ";" << left << "H" << CLR_GOLD << "├" << repeat_utf8("─", box_w - 2) << "┤" << CLR_RESET;
 
         const char * help_lines[] = {
             "  [Enter] / [F5]        Launch Sandwich Engine with current settings",
             "  [↑] / [↓]             Browse models / navigate flags grid",
             "  [←] / [→]             Horizontally scroll drafters, context, & quant",
-            "  [Tab] / [Shift+Tab]   Switch between Model, Drafter, Context, Flags",
+            "  [Tab] / [Shift+Tab]   Switch sections: Model ➔ Drafter ➔ Context ➔ Flags",
             "  [Space]               Toggle flag checkbox / edit custom context",
             "  [/]                   Quick-search filter for model catalog",
             "  [R]                   Rescan local GGUF models on disk",
@@ -489,12 +563,12 @@ void TUIWizard::render_dashboard() {
         for (size_t i = 0; i < 9; ++i) {
             std::string hl = help_lines[i];
             if (hl.size() < (size_t)(box_w - 4)) hl += std::string(box_w - 4 - hl.size(), ' ');
-            out << "\033[" << top + 3 + i << ";" << left << "H" << CLR_GOLD << "║ " << CLR_RESET << hl << CLR_GOLD << " ║" << CLR_RESET;
+            out << "\033[" << top + 3 + i << ";" << left << "H" << CLR_GOLD << "│ " << CLR_RESET << hl << CLR_GOLD << " │" << CLR_RESET;
         }
 
-        out << "\033[" << top + 12 << ";" << left << "H" << CLR_GOLD << "╠" << repeat_utf8("═", box_w - 2) << "╣" << CLR_RESET;
-        out << "\033[" << top + 13 << ";" << left << "H" << CLR_GOLD << "║ " << CLR_LIGHT_YEL << "  Press any key or [Esc] to return... " << std::string(box_w - 40, ' ') << CLR_GOLD << "║" << CLR_RESET;
-        out << "\033[" << top + 14 << ";" << left << "H" << CLR_GOLD << "╚" << repeat_utf8("═", box_w - 2) << "╝" << CLR_RESET;
+        out << "\033[" << top + 13 << ";" << left << "H" << CLR_GOLD << "├" << repeat_utf8("─", box_w - 2) << "┤" << CLR_RESET;
+        out << "\033[" << top + 14 << ";" << left << "H" << CLR_GOLD << "│ " << CLR_LIGHT_YEL << "  Press any key or [Esc] to return... " << std::string(box_w - 42, ' ') << CLR_GOLD << "│" << CLR_RESET;
+        out << "\033[" << top + 15 << ";" << left << "H" << CLR_GOLD << "╰" << repeat_utf8("─", box_w - 2) << "╯" << CLR_RESET;
     }
 
     std::cout << out.str() << std::flush;
@@ -502,8 +576,8 @@ void TUIWizard::render_dashboard() {
 
 void TUIWizard::render_header(std::ostringstream & out) {
     out << "\033[1;1H" << CLR_GOLD << " 🥪 SANDWICH.CPP ── SMART-DISPATCH "
-        << CLR_GRAY << "│ " << CLR_CYAN << profile.cpu.model_name << " "
-        << CLR_GRAY << "│ " << CLR_LIGHT_YEL << profile.gpu.device_name
+        << CLR_DARK_GRAY << "│ " << CLR_CYAN << profile.cpu.model_name << " "
+        << CLR_DARK_GRAY << "│ " << CLR_LIGHT_YEL << profile.gpu.device_name
         << CLR_RESET << "\033[K";
 }
 
@@ -515,21 +589,21 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         out << "\033[" << r++ << ";" << start_col << "H";
         const char * clr = active ? CLR_GOLD : CLR_DARK_GRAY;
         const char * tclr = active ? CLR_LIGHT_YEL : CLR_GRAY;
-        out << clr << "┌─[" << tclr << " " << title << " " << clr << "]─"
-            << repeat_utf8("─", std::max(0, width - (int)title.size() - 8)) << "┐" << CLR_RESET << "\033[K";
+        out << clr << "╭──[" << tclr << " " << title << " " << clr << "]──"
+            << repeat_utf8("─", std::max(0, width - (int)title.size() - 9)) << "╮" << CLR_RESET << "\033[K";
     };
 
     auto print_box_footer = [&](bool active) {
         out << "\033[" << r++ << ";" << start_col << "H";
         const char * clr = active ? CLR_GOLD : CLR_DARK_GRAY;
-        out << clr << "└" << repeat_utf8("─", std::max(0, width - 2)) << "┘" << CLR_RESET << "\033[K";
+        out << clr << "╰" << repeat_utf8("─", std::max(0, width - 2)) << "╯" << CLR_RESET << "\033[K";
     };
 
     // ─────────────────────────────────────────────────────────────
     // 1. MODEL SELECTION BOX
     // ─────────────────────────────────────────────────────────────
     bool act_models = (active_section == ActiveSection::MODELS);
-    print_box_header(act_models ? "1. MODELS (Active: [Enter] Runs)" : "1. MODELS", act_models);
+    print_box_header(act_models ? "1. BASE MODEL (Active: [Enter] Launch, [↑/↓] Select)" : "1. BASE MODEL", act_models);
 
     // Filter bar
     out << "\033[" << r++ << ";" << start_col << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
@@ -538,7 +612,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
     } else if (!model_filter.empty()) {
         out << CLR_CYAN << "Filter: '" << model_filter << "' ([/] edit, [Esc] clear)" << CLR_RESET;
     } else {
-        out << CLR_GRAY << "Press [/] to search " << catalog.models.size() << " models | [Enter] Launch" << CLR_RESET;
+        out << CLR_GRAY << "Search [/] | " << catalog.models.size() << " models cached | [Enter] Launch Engine" << CLR_RESET;
     }
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
 
@@ -572,8 +646,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
             if (idx < matched_idx.size()) {
                 const auto & m = catalog.models[matched_idx[idx]];
                 bool is_cur = (idx == model_cursor);
-                std::string dname = m.display_name;
-                if (dname.size() > 32) dname = dname.substr(0, 29) + "...";
+                std::string dname = smart_truncate(m.display_name, 32);
 
                 if (is_cur && act_models) {
                     out << BG_YEL << " ▶ " << std::left << std::setw(32) << dname
@@ -595,27 +668,39 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
             out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
         }
     }
+
+    // Scroll status bar for models
+    out << "\033[" << r++ << ";" << start_col << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
+    out << CLR_DARK_GRAY << "Scroll: "
+        << (model_page_offset > 0 ? "▲ " : "  ")
+        << (model_cursor + 1) << "/" << matched_idx.size()
+        << (model_page_offset + page_sz < matched_idx.size() ? " ▼" : "  ")
+        << " │ Selected: " << CLR_CYAN << smart_truncate(state.selected_model.display_name, 28)
+        << CLR_RESET;
+    out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_models ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
+
     print_box_footer(act_models);
 
     // ─────────────────────────────────────────────────────────────
-    // 2. SPECULATIVE DRAFTER (Horizontal Scrolling)
+    // 2. SPECULATIVE DRAFTER CAROUSEL (Horizontal Sliding with Full Visibility)
     // ─────────────────────────────────────────────────────────────
     bool act_d = (active_section == ActiveSection::DRAFTERS);
-    print_box_header(act_d ? "2. SPECULATIVE DRAFTER (Active: [←/→] Scroll)" : "2. SPECULATIVE DRAFTER", act_d);
-    out << "\033[" << r++ << ";" << start_col << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
+    print_box_header(act_d ? "2. SPECULATIVE DRAFTER (Active: [←/→] Horizontal Scroll)" : "2. SPECULATIVE DRAFTER", act_d);
 
     size_t total_drafters = catalog.drafters.size() + 1; // 0=None, 1..N
     if (drafter_cursor >= total_drafters) drafter_cursor = total_drafters - 1;
 
-    // Slide drafter window so drafter_cursor is always visible
-    const size_t visible_drafter_count = 2; // fits ~2 long pills + indicators
+    // Show 3 visible drafter slots
+    const size_t visible_drafter_count = 3;
     if (drafter_cursor < drafter_page_offset) {
         drafter_page_offset = drafter_cursor;
     } else if (drafter_cursor >= drafter_page_offset + visible_drafter_count) {
         drafter_page_offset = drafter_cursor - visible_drafter_count + 1;
     }
 
-    // Left scroll arrow
+    // Row 1: Carousel Items
+    out << "\033[" << r++ << ";" << start_col << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
+
     if (drafter_page_offset > 0) out << CLR_LIGHT_YEL << "◀ " << CLR_RESET;
     else out << CLR_DARK_GRAY << "  " << CLR_RESET;
 
@@ -626,10 +711,9 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         bool is_cur_d = (drafter_cursor == d_idx);
         std::string label;
         if (d_idx == 0) {
-            label = "None (Single-Token)";
+            label = "None (1x Single-Token)";
         } else {
-            label = catalog.drafters[d_idx - 1].filename;
-            if (label.size() > 22) label = label.substr(0, 19) + "..";
+            label = smart_truncate(catalog.drafters[d_idx - 1].filename, 20);
         }
 
         if (is_cur_d && act_d) {
@@ -641,12 +725,26 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         }
     }
 
-    // Right scroll arrow
     if (drafter_page_offset + visible_drafter_count < total_drafters) {
         out << CLR_LIGHT_YEL << "▶" << CLR_RESET;
+    } else {
+        out << " ";
     }
 
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
+
+    // Row 2: Selected Drafter Full Info
+    out << "\033[" << r++ << ";" << start_col << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
+    if (state.use_speculative) {
+        out << CLR_CYAN << "Slot [" << (drafter_cursor) << "/" << catalog.drafters.size() << "]: "
+            << smart_truncate(state.selected_drafter.filename, 38)
+            << " (" << std::fixed << std::setprecision(1) << state.selected_drafter.size_gb << " GB) "
+            << CLR_GREEN << "⚡ ~2.1x Speedup" << CLR_RESET;
+    } else {
+        out << CLR_GRAY << "Slot [0/" << catalog.drafters.size() << "]: Standard dense/MoE token-by-token generation (no drafter)" << CLR_RESET;
+    }
+    out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_d ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
+
     print_box_footer(act_d);
 
     // ─────────────────────────────────────────────────────────────
@@ -655,12 +753,12 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
     bool act_cq = (active_section == ActiveSection::CONTEXT_QUANT);
     print_box_header(act_cq ? "3. CONTEXT & KV QUANT (Active: [←/→] Scroll, [Space] Edit)" : "3. CONTEXT & KV QUANT", act_cq);
 
-    // Row 1: Context Lengths (Preset + Custom)
+    // Row 1: Context Lengths
     out << "\033[" << r++ << ";" << start_col << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
-    out << CLR_BOLD << "Ctx:   " << CLR_RESET;
+    out << (act_cq && cq_subfocus == 0 ? CLR_LIGHT_YEL : CLR_BOLD) << "Ctx:   " << CLR_RESET;
 
     static const char * ctx_labels[] = {
-        "2048", "4096", "8192", "16384", "32768", "65536", "131072"
+        "2K", "4K", "8K", "16K", "32K", "64K", "128K"
     };
     size_t total_ctx_options = 8; // 0..6 presets + 7 Custom
     if (context_cursor >= total_ctx_options) context_cursor = total_ctx_options - 1;
@@ -701,13 +799,15 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
 
     if (context_page_offset + visible_ctx_count < total_ctx_options) {
         out << CLR_LIGHT_YEL << "▶" << CLR_RESET;
+    } else {
+        out << " ";
     }
 
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
 
     // Row 2: KV Quantization (Horizontal Scrolling across all 8 quant modes)
     out << "\033[" << r++ << ";" << start_col << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
-    out << CLR_BOLD << "Quant: " << CLR_RESET;
+    out << (act_cq && cq_subfocus == 1 ? CLR_LIGHT_YEL : CLR_BOLD) << "Quant: " << CLR_RESET;
 
     static const char * quant_labels[] = {
         "turbo4 (4-bit)",
@@ -716,8 +816,8 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         "turbo2 (2-bit)",
         "q8_0 (8-bit)",
         "q4_0 (4-bit)",
-        "bf16",
-        "f16"
+        "bf16 (16-bit)",
+        "f16 (16-bit)"
     };
     size_t total_quant_options = 8;
     if (kv_quant_cursor >= total_quant_options) kv_quant_cursor = total_quant_options - 1;
@@ -750,13 +850,15 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
 
     if (kv_quant_page_offset + visible_quant_count < total_quant_options) {
         out << CLR_LIGHT_YEL << "▶" << CLR_RESET;
+    } else {
+        out << " ";
     }
 
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
     print_box_footer(act_cq);
 
     // ─────────────────────────────────────────────────────────────
-    // 4. OPTIMIZATION FLAGS (10 Flags in 2-Column Scrollable Grid)
+    // 4. OPTIMIZATION FLAGS (12 Flags in 2-Column Scrollable Grid)
     // ─────────────────────────────────────────────────────────────
     bool act_f = (active_section == ActiveSection::OPTIMIZATION_FLAGS);
     print_box_header(act_f ? "4. OPTIMIZATION FLAGS (Active: [Space] Toggle, [↑/↓/←/→] Navigate)" : "4. OPTIMIZATION FLAGS", act_f);
@@ -767,19 +869,21 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         const char * flag;
     };
     FlagItem flag_items[] = {
-        {state.flash_attn,    "Flash Attention 2", "-fa"},
-        {state.turbo_kvarn,   "Turbo-KVarN Hybrid", "--turbo-kvran"},
+        {state.flash_attn,    "Flash Attention 2",   "-fa"},
+        {state.turbo_kvarn,   "Turbo-KVarN Hybrid",  "--turbo-kvran"},
         {state.dynamic_yarn,  "Dynamic YaRN Scaling", "--dynamic-yarn"},
         {state.lock_p_cores,  "Pin 6 Intel P-Cores", "-t 6"},
-        {state.moe_row_split, "MoE Row-Split Tier", "-sm row"},
-        {state.wayland_guard, "7.1GB Wayland Guard", "-fitt 7100"},
-        {state.radix_cache,   "Radix Prefix Cache", "--radix-cache"},
+        {state.moe_row_split, "MoE Row-Split Tier",  "-sm row"},
+        {state.wayland_guard, "7.1GB Wayland Guard",  "-fitt 7100"},
+        {state.radix_cache,   "Radix Prefix Cache",  "--radix-cache"},
         {state.attn_sinks,    "Attention Sinks (4)", "--attn-sinks 4"},
-        {state.spec_tree,     "EAGLE Spec Tree", "--spec-tree"},
-        {state.split_kv,      "Asymmetric Split-KV", "--split-kv"}
+        {state.spec_tree,     "EAGLE Spec Tree",     "--spec-tree"},
+        {state.split_kv,      "Asymmetric Split-KV", "--split-kv"},
+        {state.warm_pool,     "WARM DDR5 Pool (18G)","--warm-pool 18G"},
+        {state.io_uring,      "io_uring Direct DMA", "--io-uring"}
     };
 
-    size_t total_flag_rows = 5; // 10 flags = 5 rows x 2 columns
+    size_t total_flag_rows = 6; // 12 flags = 6 rows x 2 columns
     size_t cur_row = flags_cursor / 2;
     if (cur_row < flags_row_offset) {
         flags_row_offset = cur_row;
@@ -793,7 +897,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
 
         out << "\033[" << r++ << ";" << start_col << "H" << (act_f ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
 
-        // Scroll indicator on top-right or bottom-right
+        // Scroll indicator
         if (row_i == 0 && flags_row_offset > 0) out << CLR_LIGHT_YEL << "▲ " << CLR_RESET;
         else if (row_i == 2 && flags_row_offset + 3 < total_flag_rows) out << CLR_LIGHT_YEL << "▼ " << CLR_RESET;
         else out << "  ";
@@ -803,17 +907,17 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         bool cur1 = (act_f && flags_cursor == fi1);
         std::string m1 = flag_items[fi1].val ? "[✔] " : "[ ] ";
         if (cur1) out << BG_YEL << "▶ " << m1 << flag_items[fi1].name << " " << CLR_RESET;
-        else out << (flag_items[fi1].val ? CLR_GREEN : CLR_GRAY) << m1 << CLR_RESET << CLR_GRAY << std::left << std::setw(20) << flag_items[fi1].name << CLR_RESET;
+        else out << (flag_items[fi1].val ? CLR_GREEN : CLR_GRAY) << m1 << CLR_RESET << CLR_GRAY << std::left << std::setw(21) << flag_items[fi1].name << CLR_RESET;
 
         out << " ";
 
         // Col 2
         size_t fi2 = actual_row * 2 + 1;
-        if (fi2 < 10) {
+        if (fi2 < 12) {
             bool cur2 = (act_f && flags_cursor == fi2);
             std::string m2 = flag_items[fi2].val ? "[✔] " : "[ ] ";
             if (cur2) out << BG_YEL << "▶ " << m2 << flag_items[fi2].name << " " << CLR_RESET;
-            else out << (flag_items[fi2].val ? CLR_GREEN : CLR_GRAY) << m2 << CLR_RESET << CLR_GRAY << std::left << std::setw(20) << flag_items[fi2].name << CLR_RESET;
+            else out << (flag_items[fi2].val ? CLR_GREEN : CLR_GRAY) << m2 << CLR_RESET << CLR_GRAY << std::left << std::setw(21) << flag_items[fi2].name << CLR_RESET;
         }
 
         out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << (act_f ? CLR_GOLD : CLR_DARK_GRAY) << "│" << CLR_RESET << "\033[K";
@@ -829,8 +933,8 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
     // UPPER HALF: ACTIVITY LOG
     // ─────────────────────────────────────────────────────────────
     out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD
-        << "┌─[ " << CLR_LIGHT_YEL << "ACTIVITY LOG" << CLR_GOLD << " ]"
-        << repeat_utf8("─", std::max(0, width - 16)) << "┐" << CLR_RESET << "\033[K";
+        << "╭──[ " << CLR_LIGHT_YEL << "ACTIVITY LOG" << CLR_GOLD << " ]"
+        << repeat_utf8("─", std::max(0, width - 17)) << "╮" << CLR_RESET << "\033[K";
 
     int log_lines = std::max(3, half_h - 2);
     int start_log_idx = (int)event_logs.size() - log_lines;
@@ -846,10 +950,10 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
         }
         out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << CLR_GOLD << "│" << CLR_RESET << "\033[K";
     }
-    out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "└" << repeat_utf8("─", std::max(0, width - 2)) << "┘" << CLR_RESET << "\033[K";
+    out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "╰" << repeat_utf8("─", std::max(0, width - 2)) << "╯" << CLR_RESET << "\033[K";
 
     // ─────────────────────────────────────────────────────────────
-    // LOWER HALF: REAL-TIME SYSTEM MONITOR
+    // LOWER HALF: REAL-TIME SYSTEM MONITOR & TELEMETRY
     // ─────────────────────────────────────────────────────────────
     LiveHardwareStats st;
     {
@@ -858,45 +962,56 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
     }
 
     out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD
-        << "┌─[ " << CLR_LIGHT_YEL << "SYSTEM MONITOR" << CLR_GOLD << " ]"
-        << repeat_utf8("─", std::max(0, width - 18)) << "┐" << CLR_RESET << "\033[K";
+        << "╭──[ " << CLR_LIGHT_YEL << "SYSTEM MONITOR" << CLR_GOLD << " ]"
+        << repeat_utf8("─", std::max(0, width - 19)) << "╮" << CLR_RESET << "\033[K";
 
     auto print_stat_line = [&](const std::string & label, const std::string & val, const char * clr) {
         out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "│ " << CLR_RESET;
-        out << CLR_BOLD << std::left << std::setw(11) << label << CLR_RESET << ": "
+        out << CLR_BOLD << std::left << std::setw(10) << label << CLR_RESET << ": "
             << clr << val << CLR_RESET;
         out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << CLR_GOLD << "│" << CLR_RESET << "\033[K";
     };
 
     print_stat_line("GPU", profile.gpu.device_name, CLR_LIGHT_YEL);
 
+    // VRAM Progress Bar Gauge
+    float vram_frac = (st.gpu_total_mb > 0) ? (float)st.gpu_used_mb / (float)st.gpu_total_mb : 0.0f;
+    std::string vram_bar = format_progress_bar(vram_frac, 10, CLR_CYAN);
     char vram_buf[64];
-    snprintf(vram_buf, sizeof(vram_buf), "%lu MB / %lu MB (%d°C)",
+    snprintf(vram_buf, sizeof(vram_buf), "%lu/%lu MB (%d°C)",
              (unsigned long)st.gpu_used_mb, (unsigned long)st.gpu_total_mb, st.gpu_temp_c);
-    print_stat_line("VRAM", vram_buf, CLR_CYAN);
+    out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "│ " << CLR_RESET
+        << CLR_BOLD << "VRAM Gauge" << CLR_RESET << ": " << vram_bar << " " << CLR_CYAN << vram_buf << CLR_RESET;
+    out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << CLR_GOLD << "│" << CLR_RESET << "\033[K";
 
-    print_stat_line("Guard", "7,100 MB Limit (Safe)", CLR_GREEN);
+    print_stat_line("Guard", "7,100 MB Limit (Safe for Wayland)", CLR_GREEN);
 
+    // RAM Progress Bar Gauge
+    uint64_t ram_used = (st.ram_total_mb > st.ram_free_mb) ? (st.ram_total_mb - st.ram_free_mb) : 0;
+    float ram_frac = (st.ram_total_mb > 0) ? (float)ram_used / (float)st.ram_total_mb : 0.0f;
+    std::string ram_bar = format_progress_bar(ram_frac, 10, CLR_CYAN);
     char ram_buf[64];
-    snprintf(ram_buf, sizeof(ram_buf), "%.1f GB Free / %.1f GB Total",
-             st.ram_free_mb / 1024.0, st.ram_total_mb / 1024.0);
-    print_stat_line("RAM", ram_buf, CLR_CYAN);
+    snprintf(ram_buf, sizeof(ram_buf), "%.1f/%.1f GB (%.0f%%)",
+             ram_used / 1024.0, st.ram_total_mb / 1024.0, ram_frac * 100.0f);
+    out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "│ " << CLR_RESET
+        << CLR_BOLD << "RAM Gauge " << CLR_RESET << ": " << ram_bar << " " << CLR_CYAN << ram_buf << CLR_RESET;
+    out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << CLR_GOLD << "│" << CLR_RESET << "\033[K";
 
     char warm_buf[64];
-    snprintf(warm_buf, sizeof(warm_buf), "%.1f GB (70%% Rule #42)",
+    snprintf(warm_buf, sizeof(warm_buf), "%.1f GB (70%% Rule #42 Pinned)",
              profile.ram.max_safe_allocation_mb / 1024.0);
     print_stat_line("WARM Pool", warm_buf, CLR_GREEN);
 
     char cpu_buf[64];
     snprintf(cpu_buf, sizeof(cpu_buf), "%d P-cores pinned @ %d°C",
              profile.cpu.p_cores, st.cpu_temp_c);
-    print_stat_line("CPU", cpu_buf, CLR_LIGHT_YEL);
+    print_stat_line("CPU Cores", cpu_buf, CLR_LIGHT_YEL);
 
     char disk_buf[64];
-    snprintf(disk_buf, sizeof(disk_buf), "%.0f GB Free (NVMe)", st.disk_free_gb);
+    snprintf(disk_buf, sizeof(disk_buf), "%.0f GB Free (io_uring NVMe)", st.disk_free_gb);
     print_stat_line("Storage", disk_buf, CLR_GRAY);
 
-    out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "└" << repeat_utf8("─", std::max(0, width - 2)) << "┘" << CLR_RESET << "\033[K";
+    out << "\033[" << r++ << ";" << start_col << "H" << CLR_GOLD << "╰" << repeat_utf8("─", std::max(0, width - 2)) << "╯" << CLR_RESET << "\033[K";
 }
 
 void TUIWizard::render_footer(std::ostringstream & out) {
@@ -907,14 +1022,14 @@ void TUIWizard::render_footer(std::ostringstream & out) {
 
     // Row term_rows - 1: Clean Command Preview Line
     std::string cmd = state.synthesized_command;
-    if (cmd.size() > (size_t)(term_cols - 12)) cmd = cmd.substr(0, term_cols - 15) + "...";
+    if (cmd.size() > (size_t)(term_cols - 13)) cmd = cmd.substr(0, term_cols - 16) + "...";
     out << "\033[" << (term_rows - 1) << ";1H"
-        << CLR_GOLD << "▶ Command: " << CLR_RESET << cmd
+        << CLR_GOLD << "▶ Command: " << CLR_RESET << CLR_BOLD << cmd << CLR_RESET
         << "\033[K";
 
     // Row term_rows: Clean Status / Hotkey bar
     out << "\033[" << term_rows << ";1H"
-        << BG_GOLD << " [Enter] Launch Selected Model " << CLR_RESET << " "
+        << BG_GOLD << " [Enter] Launch Engine " << CLR_RESET << " "
         << CLR_GOLD << "[↑/↓/←/→] Navigate  [Tab] Switch Section  [Space] Toggle/Edit  [/] Search  [Esc] Quit" << CLR_RESET
         << "\033[K";
 }
@@ -943,7 +1058,7 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
     if (model_filter_mode) {
         if (ev.code == KeyCode::ENTER || ev.code == KeyCode::ESCAPE) {
             model_filter_mode = false;
-            log_event("Filter: '" + model_filter + "'");
+            log_event("Filter applied: '" + model_filter + "'");
         } else if (ev.code == KeyCode::BACKSPACE) {
             if (!model_filter.empty()) model_filter.pop_back();
         } else if (ev.code == KeyCode::CHAR) {
@@ -1006,14 +1121,21 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
             if (active_section == ActiveSection::MODELS) {
                 if (model_cursor + 1 < catalog.models.size()) model_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
-                if (flags_cursor + 2 < 10) flags_cursor += 2;
+                if (flags_cursor + 2 < 12) flags_cursor += 2;
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
                 cq_subfocus = 1;
             }
             break;
         case KeyCode::LEFT:
             if (active_section == ActiveSection::DRAFTERS) {
-                if (drafter_cursor > 0) drafter_cursor--;
+                if (drafter_cursor > 0) {
+                    drafter_cursor--;
+                    if (drafter_cursor == 0) {
+                        log_event("Drafter set to: None (Single-Token)");
+                    } else {
+                        log_event("Drafter set to: " + catalog.drafters[drafter_cursor - 1].filename);
+                    }
+                }
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
                 if (cq_subfocus == 0 && context_cursor > 0) context_cursor--;
                 else if (cq_subfocus == 1 && kv_quant_cursor > 0) kv_quant_cursor--;
@@ -1023,12 +1145,15 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
             break;
         case KeyCode::RIGHT:
             if (active_section == ActiveSection::DRAFTERS) {
-                if (drafter_cursor < catalog.drafters.size()) drafter_cursor++;
+                if (drafter_cursor < catalog.drafters.size()) {
+                    drafter_cursor++;
+                    log_event("Drafter set to: " + catalog.drafters[drafter_cursor - 1].filename);
+                }
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
                 if (cq_subfocus == 0 && context_cursor < 7) context_cursor++;
                 else if (cq_subfocus == 1 && kv_quant_cursor < 7) kv_quant_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
-                if (flags_cursor % 2 == 0 && flags_cursor + 1 < 10) flags_cursor++;
+                if (flags_cursor % 2 == 0 && flags_cursor + 1 < 12) flags_cursor++;
             }
             break;
         case KeyCode::SPACE:
@@ -1044,6 +1169,8 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                     case 7: state.attn_sinks    = !state.attn_sinks;    log_event(std::string("Attention Sinks: ") + (state.attn_sinks ? "ON" : "OFF")); break;
                     case 8: state.spec_tree     = !state.spec_tree;     log_event(std::string("EAGLE Spec Tree: ") + (state.spec_tree ? "ON" : "OFF")); break;
                     case 9: state.split_kv      = !state.split_kv;      log_event(std::string("Split-KV Engine: ") + (state.split_kv ? "ON" : "OFF")); break;
+                    case 10: state.warm_pool    = !state.warm_pool;     log_event(std::string("WARM DDR5 Pool: ") + (state.warm_pool ? "ON" : "OFF")); break;
+                    case 11: state.io_uring     = !state.io_uring;      log_event(std::string("io_uring Direct DMA: ") + (state.io_uring ? "ON" : "OFF")); break;
                 }
             } else if (active_section == ActiveSection::CONTEXT_QUANT && cq_subfocus == 0 && context_cursor == 7) {
                 context_custom_mode = true;
@@ -1067,6 +1194,12 @@ bool TUIWizard::run(WizardConfig & out_config) {
     bool need_redraw = true;
 
     while (running) {
+        if (s_sigwinch_received.exchange(false)) {
+            update_terminal_size();
+            std::cout << "\033[2J\033[H" << std::flush;
+            need_redraw = true;
+        }
+
         if (need_redraw) {
             render_dashboard();
             need_redraw = false;

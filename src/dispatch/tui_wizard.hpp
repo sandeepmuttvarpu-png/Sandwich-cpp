@@ -43,7 +43,7 @@ struct WizardConfig {
     ModelMetadata   selected_model;
     ModelMetadata   selected_drafter;
     bool            use_speculative       = false;
-    int             context_length        = 4096;
+    int             context_length        = 65536;
     std::string     kv_quant              = "turbo4";
     bool            flash_attn            = true;
     bool            lock_p_cores          = true;
@@ -55,6 +55,8 @@ struct WizardConfig {
     bool            wayland_guard         = true;
     bool            attn_sinks            = false;
     bool            split_kv              = false;
+    bool            warm_pool             = true;
+    bool            io_uring              = true;
     TieringPlan     tiering;
     std::string     synthesized_command;
     bool            should_launch         = false;
@@ -90,6 +92,8 @@ public:
     // Returns true if user chose to Launch, populating out_config
     bool run(WizardConfig & out_config);
 
+    static void on_terminal_resize();
+
 private:
     HardwareProfile profile;
     ModelCatalog    catalog;
@@ -100,6 +104,7 @@ private:
     // Terminal Raw Mode Management
     struct termios  orig_termios;
     bool            raw_mode_active = false;
+    static std::atomic<bool> s_sigwinch_received;
 
     void enable_raw_mode();
     void disable_raw_mode();
@@ -114,6 +119,10 @@ private:
     // Sub-panel renderers
     void render_left_panel(std::ostringstream & out, int start_row, int start_col, int width, int height);
     void render_right_panel(std::ostringstream & out, int start_row, int start_col, int width, int height);
+
+    // Helpers
+    std::string format_progress_bar(float fraction, int bar_width, const char * fill_clr);
+    std::string smart_truncate(const std::string & text, size_t max_len);
 
     // Event & Input Handlers
     void handle_input(const KeyEvent & ev);
@@ -136,17 +145,17 @@ private:
     size_t drafter_page_offset = 0;
 
     // Context & Quant navigation (horizontal scrolling + custom)
-    size_t context_cursor = 1; // 0=2048, 1=4096, 2=8192, 3=16384, 4=32768, 5=65536, 6=131072, 7=Custom
+    size_t context_cursor = 5; // default: 5 -> 65536 (64k)
     size_t context_page_offset = 0;
     bool   context_custom_mode = false;
-    std::string context_custom_str = "131072";
+    std::string context_custom_str = "65536";
 
     size_t kv_quant_cursor = 0; // 0..7
     size_t kv_quant_page_offset = 0;
     int    cq_subfocus = 0; // 0 = context row, 1 = quant row
 
-    // Optimization Flags navigation (2-column scrollable grid)
-    size_t flags_cursor = 0; // 0..9 flags
+    // Optimization Flags navigation (2-column scrollable grid: 12 flags)
+    size_t flags_cursor = 0; // 0..11 flags
     size_t flags_row_offset = 0;
     std::string last_hovered_hint;
 
