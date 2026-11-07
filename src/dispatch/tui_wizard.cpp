@@ -1,4 +1,8 @@
 #include "tui_wizard.hpp"
+#include "ram_estimator.hpp"
+#include "memory_watermark.hpp"
+#include "prefetch_scheduler.hpp"
+#include "ram_cache_layer.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -238,21 +242,20 @@ void TUIWizard::stop_hardware_monitor() {
 void TUIWizard::update_hardware_stats() {
     LiveHardwareStats st;
 
-    // RAM via /proc/meminfo
-    std::ifstream meminfo("/proc/meminfo");
-    if (meminfo.is_open()) {
-        std::string line;
-        uint64_t total_kb = 0, avail_kb = 0;
-        while (std::getline(meminfo, line)) {
-            if (line.rfind("MemTotal:", 0) == 0) {
-                sscanf(line.c_str(), "MemTotal: %lu kB", &total_kb);
-            } else if (line.rfind("MemAvailable:", 0) == 0) {
-                sscanf(line.c_str(), "MemAvailable: %lu kB", &avail_kb);
-            }
-        }
-        st.ram_total_mb = total_kb / 1024;
-        st.ram_free_mb  = avail_kb / 1024;
+    // Real-time RAM & VRAM sampling via RAMEstimator
+    RealtimeRAMStats r_stats = RAMEstimator::sample_realtime_ram();
+    st.ram_total_mb = r_stats.total_mb;
+    st.ram_free_mb  = r_stats.available_mb;
+
+    RealtimeVRAMStats v_stats = RAMEstimator::sample_realtime_vram();
+    if (v_stats.cuda_available) {
+        st.gpu_total_mb = v_stats.total_mb;
+        st.gpu_used_mb  = v_stats.used_mb;
     }
+
+    static MemoryWatermarker watermarker;
+    watermarker.update_realtime(r_stats, v_stats);
+    st.watermark_status = watermarker.get_telemetry().diagnostics_msg;
 
     // Storage via statvfs on /home
     struct statvfs svfs;
@@ -270,15 +273,13 @@ void TUIWizard::update_hardware_stats() {
         if (thm >> millic) st.cpu_temp_c = millic / 1000;
     }
 
-    // GPU via nvidia-smi
-    FILE * fp = popen("nvidia-smi --query-gpu=memory.used,memory.total,temperature.gpu,utilization.gpu --format=csv,noheader,nounits 2>/dev/null", "r");
+    // GPU Temp and Util via nvidia-smi
+    FILE * fp = popen("nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv,noheader,nounits 2>/dev/null", "r");
     if (fp) {
         char buf[128];
         if (fgets(buf, sizeof(buf), fp)) {
-            unsigned int used = 0, total = 8151, temp = 36, util = 0;
-            if (sscanf(buf, "%u, %u, %u, %u", &used, &total, &temp, &util) >= 3) {
-                st.gpu_used_mb  = used;
-                st.gpu_total_mb = total;
+            unsigned int temp = 36, util = 0;
+            if (sscanf(buf, "%u, %u", &temp, &util) >= 1) {
                 st.gpu_temp_c   = temp;
                 st.gpu_util_pct = util;
             }
@@ -415,6 +416,18 @@ void TUIWizard::recompute_tiering_and_command() {
     if (state.warm_pool)     cmd << " --warm-pool 18G";
     if (state.io_uring)      cmd << " --io-uring";
 
+    if (state.chunked_prefill) {
+        if (state.selected_model.is_moe) {
+            state.prefill_chunk_size = (state.context_length > 16384) ? 64 : 128;
+        } else {
+            state.prefill_chunk_size = (state.context_length >= 16384) ? 256 : 512;
+        }
+        cmd << " --chunked-prefill -ub " << state.prefill_chunk_size;
+    }
+    if (state.dynamic_watermark) cmd << " --dynamic-watermark";
+    if (state.asym_prefetch)     cmd << " --asym-prefetch";
+    if (state.ram_cache_layer)   cmd << " --ram-cache-mb 2048";
+
     state.synthesized_command = cmd.str();
 
     // Single-line hint update
@@ -451,6 +464,10 @@ void TUIWizard::recompute_tiering_and_command() {
                 "P-Core Affinity: Pin compute to physical cores ──▶ Adds: -t 6",
                 "MoE Row-Split: Dynamic expert memory tiering ──▶ Adds: -sm row",
                 "Wayland Guard: 7.1GB VRAM compositor protection ──▶ Adds: -fitt 7100",
+                "Chunked Prefill: Dynamic micro-chunking ──▶ Adds: --chunked-prefill",
+                "Dyn Memory Watermark: Live HWM 85% / LWM 70% tracking ──▶ Adds: --dynamic-watermark",
+                "Asym Parallel Prefetch: Pinned DMA shared weights + lookahead ──▶ Adds: --asym-prefetch",
+                "Host RAM Cache: 2MB THP Host L2 Cache buffer ──▶ Adds: --ram-cache-mb 2048",
                 "Radix Prefix Cache: Multi-turn prompt reuse ──▶ Adds: --radix-cache",
                 "Attention Sinks: Preserves first 4 sink tokens ──▶ Adds: --attn-sinks 4",
                 "EAGLE Spec Tree: Multi-path draft tree decoding ──▶ Adds: --spec-tree",
@@ -458,7 +475,7 @@ void TUIWizard::recompute_tiering_and_command() {
                 "WARM DDR5 Pool: 18-20GB zero-trim cache (Rule #42) ──▶ Adds: --warm-pool 18G",
                 "io_uring Direct DMA: Kernel-level async paging ──▶ Adds: --io-uring"
             };
-            if (flags_cursor < 12) last_hovered_hint = flag_descs[flags_cursor];
+            if (flags_cursor < 16) last_hovered_hint = flag_descs[flags_cursor];
             break;
         }
         default:
@@ -486,9 +503,13 @@ void TUIWizard::save_preset() {
     j["attn_sinks"]    = state.attn_sinks;
     j["split_kv"]      = state.split_kv;
     j["spec_tree"]     = state.spec_tree;
-    j["warm_pool"]     = state.warm_pool;
-    j["io_uring"]      = state.io_uring;
-    j["command"]       = state.synthesized_command;
+    j["warm_pool"]         = state.warm_pool;
+    j["io_uring"]          = state.io_uring;
+    j["chunked_prefill"]   = state.chunked_prefill;
+    j["dynamic_watermark"] = state.dynamic_watermark;
+    j["asym_prefetch"]     = state.asym_prefetch;
+    j["ram_cache_layer"]   = state.ram_cache_layer;
+    j["command"]           = state.synthesized_command;
 
     std::ofstream ofs(out_path);
     if (ofs.is_open()) {
@@ -843,7 +864,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
     print_box_footer(act_cq);
 
     // ─────────────────────────────────────────────────────────────
-    // 4. OPTIMIZATION FLAGS (12 Flags in 2-Column Scrollable Grid)
+    // 4. OPTIMIZATION FLAGS (16 Flags in 2-Column Scrollable Grid)
     // ─────────────────────────────────────────────────────────────
     bool act_f = (active_section == ActiveSection::OPTIMIZATION_FLAGS);
     print_box_header(act_f ? "4. OPTIMIZATION FLAGS (Active: [Space] Toggle, [↑/↓/←/→] Navigate)" : "4. OPTIMIZATION FLAGS", act_f);
@@ -854,21 +875,25 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         const char * flag;
     };
     FlagItem flag_items[] = {
-        {state.flash_attn,    "Flash Attention 2",   "-fa"},
-        {state.turbo_kvarn,   "Turbo-KVarN Hybrid",  "--turbo-kvran"},
-        {state.dynamic_yarn,  "Dynamic YaRN Scaling", "--dynamic-yarn"},
-        {state.lock_p_cores,  "Pin 6 Intel P-Cores", "-t 6"},
-        {state.moe_row_split, "MoE Row-Split Tier",  "-sm row"},
-        {state.wayland_guard, "7.1GB Wayland Guard",  "-fitt 7100"},
-        {state.radix_cache,   "Radix Prefix Cache",  "--radix-cache"},
-        {state.attn_sinks,    "Attention Sinks (4)", "--attn-sinks 4"},
-        {state.spec_tree,     "EAGLE Spec Tree",     "--spec-tree"},
-        {state.split_kv,      "Asymmetric Split-KV", "--split-kv"},
-        {state.warm_pool,     "WARM DDR5 Pool (18G)","--warm-pool 18G"},
-        {state.io_uring,      "io_uring Direct DMA", "--io-uring"}
+        {state.flash_attn,        "Flash Attention 2",    "-fa"},
+        {state.turbo_kvarn,       "Turbo-KVarN Hybrid",   "--turbo-kvran"},
+        {state.dynamic_yarn,      "Dynamic YaRN Scaling",  "--dynamic-yarn"},
+        {state.lock_p_cores,      "Pin 6 Intel P-Cores",  "-t 6"},
+        {state.moe_row_split,     "MoE Row-Split Tier",   "-sm row"},
+        {state.wayland_guard,     "7.1GB Wayland Guard",   "-fitt 7100"},
+        {state.chunked_prefill,   "Chunked Prefill",      "--chunked-prefill"},
+        {state.dynamic_watermark, "Dyn Memory Watermark", "--dynamic-watermark"},
+        {state.asym_prefetch,     "Asym Parallel Prefetch","--asym-prefetch"},
+        {state.ram_cache_layer,   "Host RAM Cache (2G)",  "--ram-cache-mb 2048"},
+        {state.radix_cache,       "Radix Prefix Cache",   "--radix-cache"},
+        {state.attn_sinks,        "Attention Sinks (4)",  "--attn-sinks 4"},
+        {state.spec_tree,         "EAGLE Spec Tree",      "--spec-tree"},
+        {state.split_kv,          "Asymmetric Split-KV",  "--split-kv"},
+        {state.warm_pool,         "WARM DDR5 Pool (18G)", "--warm-pool 18G"},
+        {state.io_uring,          "io_uring Direct DMA",  "--io-uring"}
     };
 
-    size_t total_flag_rows = 6; // 12 flags = 6 rows x 2 columns
+    size_t total_flag_rows = 8; // 16 flags = 8 rows x 2 columns
     size_t cur_row = flags_cursor / 2;
     if (cur_row < flags_row_offset) {
         flags_row_offset = cur_row;
@@ -898,7 +923,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
 
         // Col 2
         size_t fi2 = actual_row * 2 + 1;
-        if (fi2 < 12) {
+        if (fi2 < 16) {
             bool cur2 = (act_f && flags_cursor == fi2);
             std::string m2 = flag_items[fi2].val ? "[✔] " : "[ ] ";
             if (cur2) out << BG_YEL << "▶ " << m2 << flag_items[fi2].name << " " << CLR_RESET;
@@ -970,6 +995,10 @@ void TUIWizard::render_right_panel(std::ostringstream & out, int start_row, int 
     out << "\033[" << (r - 1) << ";" << (start_col + width - 1) << "H" << CLR_GOLD << "│" << CLR_RESET << "\033[K";
 
     print_stat_line("Guard", "7,100 MB Limit (Safe for Wayland)", CLR_GREEN);
+    print_stat_line("Watermark", st.watermark_status, CLR_LIGHT_YEL);
+    if (state.chunked_prefill) {
+        print_stat_line("Prefill", "Chunked (" + std::to_string(state.prefill_chunk_size) + " tok)", CLR_CYAN);
+    }
 
     // RAM Progress Bar Gauge
     uint64_t ram_used = (st.ram_total_mb > st.ram_free_mb) ? (st.ram_total_mb - st.ram_free_mb) : 0;
@@ -1086,7 +1115,7 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
             if (active_section == ActiveSection::MODELS) {
                 if (model_cursor + 1 < catalog.models.size()) model_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
-                if (flags_cursor + 2 < 12) flags_cursor += 2;
+                if (flags_cursor + 2 < 16) flags_cursor += 2;
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
                 cq_subfocus = 1;
             }
@@ -1118,24 +1147,28 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                 if (cq_subfocus == 0 && context_cursor < 6) context_cursor++;
                 else if (cq_subfocus == 1 && kv_quant_cursor < 7) kv_quant_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
-                if (flags_cursor % 2 == 0 && flags_cursor + 1 < 12) flags_cursor++;
+                if (flags_cursor % 2 == 0 && flags_cursor + 1 < 16) flags_cursor++;
             }
             break;
         case KeyCode::SPACE:
             if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
                 switch (flags_cursor) {
-                    case 0: state.flash_attn    = !state.flash_attn;    log_event(std::string("Flash Attention: ") + (state.flash_attn ? "ON" : "OFF")); break;
-                    case 1: state.turbo_kvarn   = !state.turbo_kvarn;   log_event(std::string("Turbo-KVarN: ") + (state.turbo_kvarn ? "ON" : "OFF")); break;
-                    case 2: state.dynamic_yarn  = !state.dynamic_yarn;  log_event(std::string("Dynamic YaRN: ") + (state.dynamic_yarn ? "ON" : "OFF")); break;
-                    case 3: state.lock_p_cores  = !state.lock_p_cores;  log_event(std::string("P-Core Affinity: ") + (state.lock_p_cores ? "ON" : "OFF")); break;
-                    case 4: state.moe_row_split = !state.moe_row_split; log_event(std::string("MoE Row-Split: ") + (state.moe_row_split ? "ON" : "OFF")); break;
-                    case 5: state.wayland_guard = !state.wayland_guard; log_event(std::string("Wayland Guard: ") + (state.wayland_guard ? "ON" : "OFF")); break;
-                    case 6: state.radix_cache   = !state.radix_cache;   log_event(std::string("Radix Cache: ") + (state.radix_cache ? "ON" : "OFF")); break;
-                    case 7: state.attn_sinks    = !state.attn_sinks;    log_event(std::string("Attention Sinks: ") + (state.attn_sinks ? "ON" : "OFF")); break;
-                    case 8: state.spec_tree     = !state.spec_tree;     log_event(std::string("EAGLE Spec Tree: ") + (state.spec_tree ? "ON" : "OFF")); break;
-                    case 9: state.split_kv      = !state.split_kv;      log_event(std::string("Split-KV Engine: ") + (state.split_kv ? "ON" : "OFF")); break;
-                    case 10: state.warm_pool    = !state.warm_pool;     log_event(std::string("WARM DDR5 Pool: ") + (state.warm_pool ? "ON" : "OFF")); break;
-                    case 11: state.io_uring     = !state.io_uring;      log_event(std::string("io_uring Direct DMA: ") + (state.io_uring ? "ON" : "OFF")); break;
+                    case 0: state.flash_attn        = !state.flash_attn;        log_event(std::string("Flash Attention: ") + (state.flash_attn ? "ON" : "OFF")); break;
+                    case 1: state.turbo_kvarn       = !state.turbo_kvarn;       log_event(std::string("Turbo-KVarN: ") + (state.turbo_kvarn ? "ON" : "OFF")); break;
+                    case 2: state.dynamic_yarn      = !state.dynamic_yarn;      log_event(std::string("Dynamic YaRN: ") + (state.dynamic_yarn ? "ON" : "OFF")); break;
+                    case 3: state.lock_p_cores      = !state.lock_p_cores;      log_event(std::string("P-Core Affinity: ") + (state.lock_p_cores ? "ON" : "OFF")); break;
+                    case 4: state.moe_row_split     = !state.moe_row_split;     log_event(std::string("MoE Row-Split: ") + (state.moe_row_split ? "ON" : "OFF")); break;
+                    case 5: state.wayland_guard     = !state.wayland_guard;     log_event(std::string("Wayland Guard: ") + (state.wayland_guard ? "ON" : "OFF")); break;
+                    case 6: state.chunked_prefill   = !state.chunked_prefill;   log_event(std::string("Chunked Prefill: ") + (state.chunked_prefill ? "ON" : "OFF")); break;
+                    case 7: state.dynamic_watermark = !state.dynamic_watermark; log_event(std::string("Dyn Watermark: ") + (state.dynamic_watermark ? "ON" : "OFF")); break;
+                    case 8: state.asym_prefetch     = !state.asym_prefetch;     log_event(std::string("Asym Prefetch: ") + (state.asym_prefetch ? "ON" : "OFF")); break;
+                    case 9: state.ram_cache_layer   = !state.ram_cache_layer;   log_event(std::string("Host RAM Cache: ") + (state.ram_cache_layer ? "ON" : "OFF")); break;
+                    case 10: state.radix_cache      = !state.radix_cache;       log_event(std::string("Radix Cache: ") + (state.radix_cache ? "ON" : "OFF")); break;
+                    case 11: state.attn_sinks       = !state.attn_sinks;        log_event(std::string("Attention Sinks: ") + (state.attn_sinks ? "ON" : "OFF")); break;
+                    case 12: state.spec_tree        = !state.spec_tree;         log_event(std::string("EAGLE Spec Tree: ") + (state.spec_tree ? "ON" : "OFF")); break;
+                    case 13: state.split_kv         = !state.split_kv;          log_event(std::string("Split-KV Engine: ") + (state.split_kv ? "ON" : "OFF")); break;
+                    case 14: state.warm_pool        = !state.warm_pool;         log_event(std::string("WARM DDR5 Pool: ") + (state.warm_pool ? "ON" : "OFF")); break;
+                    case 15: state.io_uring         = !state.io_uring;          log_event(std::string("io_uring Direct DMA: ") + (state.io_uring ? "ON" : "OFF")); break;
                 }
             } else if (active_section == ActiveSection::MODELS) {
                 log_event("Selected model: " + catalog.models[model_cursor].display_name);

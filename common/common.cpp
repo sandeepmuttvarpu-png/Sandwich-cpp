@@ -2330,10 +2330,12 @@ void sandwich_auto_dispatch(common_params & params) {
 
     if (params.chunked_prefill || ctx_eval >= 32768) {
         params.chunked_prefill = true;
-        if (params.n_ubatch > 512 || params.n_ubatch == 0) {
+        if (params.prefill_chunk_size > 0) {
+            params.n_ubatch = params.prefill_chunk_size;
+        } else if (params.n_ubatch > 512 || params.n_ubatch == 0) {
             params.n_ubatch = 512;
         }
-        LOG_INF("   -> [Technique #45] Chunked Context Prefill & Ping-Pong Activation Staging ACTIVE (ubatch=%d, transient VRAM < 350MB)\n", params.n_ubatch);
+        LOG_INF("   -> [Technique #45/#76] Chunked Context Prefill & Ping-Pong Activation Staging ACTIVE (ubatch=%d, transient VRAM < 350MB)\n", params.n_ubatch);
     }
 
     const bool is_mla = (model_arch == "deepseek2" || model_arch == "deepseek" || model_arch == "deepseek3" || model_arch == "deepseek4");
@@ -2397,6 +2399,19 @@ void sandwich_auto_dispatch(common_params & params) {
     if (params.speculative.types.size() > 1 || params.speculative.select) {
         params.speculative.select = true;
         LOG_INF("   -> [Dynamic Multi-Drafter] Dynamic Speculative Drafter Arbitration ACTIVE (--spec-select, Bayesian shadow learning)\n");
+    }
+
+    if (params.dynamic_watermark) {
+        LOG_INF("   -> [Technique #73] Dynamic Memory Watermarking System ACTIVE (--dynamic-watermark, live HWM 85%% / LWM 70%% tracking)\n");
+    }
+    if (params.asym_prefetch) {
+        LOG_INF("   -> [Technique #74] Asymmetric Parallel Prefetch ACTIVE (--asym-prefetch, pinned DMA shared weights + async MoE lookahead)\n");
+    }
+    if (params.ram_cache_mb > 0) {
+        LOG_INF("   -> [Technique #75] Dedicated Host RAM Caching Layer ACTIVE (--ram-cache-mb %d, 2MB THP Host L2 Cache)\n", params.ram_cache_mb);
+    }
+    if (params.chunked_prefill) {
+        LOG_INF("   -> [Technique #76] Chunked Prefill Dynamic Scheduling ACTIVE (chunk_size=%d, prevents MoE DDR5 bus thrashing)\n", params.n_ubatch);
     }
 
     params.sandwich_dispatched = true;

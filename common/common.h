@@ -683,6 +683,12 @@ struct common_params {
     int32_t     dsv41_experts              = 5;     // DeepSeek V4.1 routed experts per word (5: faster mode for <=16GB VRAM, 6: full quality)
     std::string dsv41_engram_path          = "";    // Path to DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf
 
+    // Dynamic Memory Watermarking & Asymmetric Prefetch Engine (Techniques #73 - #76)
+    bool        dynamic_watermark          = true;  // [Technique #73] Dynamic Memory Watermarking System (live HWM 85%, LWM 70% tracking)
+    bool        asym_prefetch              = true;  // [Technique #74] Asymmetric Parallel Prefetch (pinned DMA for shared weights + lookahead)
+    int32_t     ram_cache_mb               = 2048;  // [Technique #75] Dedicated Host RAM L2 Caching Layer budget in MiB (2MB THP)
+    int32_t     prefill_chunk_size         = 128;   // [Technique #76] Chunked Prefill Dynamic Scheduling (64-128 for MoE, 256-512 for dense)
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

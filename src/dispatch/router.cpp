@@ -57,6 +57,10 @@ void Router::print_help(const char * progname) {
     std::cout << "  -fa, --flash-attn           Enable Flash Attention 2\n";
     std::cout << "  -sm row                     MoE row-split cache tiering across VRAM/RAM/NVMe\n";
     std::cout << "  -ctk, -ctv <type>           KV cache quantization (e.g. turbo3, turbo4, turbo2, f16)\n";
+    std::cout << "  --chunked-prefill           Enable micro-chunked prompt prefill (prevents MoE memory stalls)\n";
+    std::cout << "  --dynamic-watermark         Live memory watermarking (HWM 85% / LWM 70% Wayland protection)\n";
+    std::cout << "  --asym-prefetch             Asymmetric parallel prefetch (pinned DMA + async lookahead)\n";
+    std::cout << "  --ram-cache-mb <mb>         Dedicated Host RAM L2 Cache budget (2MB THP Pinned)\n";
 }
 
 int Router::run_standalone_profiling(bool force) {

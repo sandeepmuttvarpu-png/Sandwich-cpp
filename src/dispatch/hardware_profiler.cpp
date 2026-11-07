@@ -1,4 +1,7 @@
 #include "hardware_profiler.hpp"
+#include "ram_estimator.hpp"
+#include "memory_watermark.hpp"
+#include "prefetch_scheduler.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -491,83 +494,72 @@ TieringPlan HardwareProfiler::calculate_tiering(
     plan.model_total_mb = model_bytes / (1024 * 1024);
     plan.total_layers = (total_layers > 0) ? total_layers : 32;
 
-    // 1. Calculate KV cache VRAM footprint
-    // Formula: 2 * n_layers * n_kv_heads * head_dim * context_length * bytes_per_element
-    double kv_bytes_per_elem = 2.0; // f16
-    if (kv_quant == "turbo4" || kv_quant == "q4_0") kv_bytes_per_elem = 0.55;
-    else if (kv_quant == "turbo3" || kv_quant == "q3_k") kv_bytes_per_elem = 0.42;
-    else if (kv_quant == "turbo2" || kv_quant == "q2_k") kv_bytes_per_elem = 0.30;
+    // 1. Real-time Live RAM & VRAM Sampling
+    RealtimeRAMStats live_ram = RAMEstimator::sample_realtime_ram();
+    RealtimeVRAMStats live_vram = RAMEstimator::sample_realtime_vram();
 
-    // Approximate KV MB for 4k context on a ~32 layer model
-    uint64_t kv_footprint_mb = static_cast<uint64_t>((plan.total_layers * 8 * 128 * context_length * 2 * kv_bytes_per_elem) / (1024 * 1024));
-    if (kv_footprint_mb == 0) kv_footprint_mb = 350; // nominal KV buffer
+    // 2. Exact GGUF Footprint Estimation
+    ModelMemoryFootprint fp = RAMEstimator::calculate_footprint(
+        model_bytes,
+        plan.total_layers,
+        context_length,
+        kv_quant,
+        is_moe,
+        expert_count,
+        active_experts
+    );
 
-    // 2. Enforce 7,100 MB Wayland VRAM Guard
-    uint64_t max_gpu_budget_mb = profile.gpu.wayland_guard_vram_mb;
-    uint64_t vram_for_weights_mb = (max_gpu_budget_mb > kv_footprint_mb + 200) ? (max_gpu_budget_mb - kv_footprint_mb - 200) : (max_gpu_budget_mb / 2);
+    // 3. Dynamic Dispatch Recommendation with Real-Time Watermarking
+    DynamicDispatchRecommendation rec = RAMEstimator::compute_realtime_dispatch(
+        fp,
+        live_ram,
+        live_vram,
+        is_moe,
+        context_length,
+        profile.gpu.wayland_guard_vram_mb
+    );
 
-    // 3. Memory Tiering Assignment
-    if (plan.model_total_mb <= vram_for_weights_mb) {
-        // Case A: Fits 100% in VRAM
-        plan.tier1_hot_vram_mb  = plan.model_total_mb;
+    // 4. Memory Tiering Assignment
+    if (rec.recommended_gpu_layers == 999) {
+        // Fits 100% in VRAM
+        plan.tier1_hot_vram_mb  = fp.total_weights_mb;
         plan.tier2_warm_ddr5_mb = 0;
         plan.tier3_cold_nvme_mb = 0;
         plan.gpu_layers         = plan.total_layers;
     } else {
-        // Case B: Model exceeds VRAM -> 3-Tier Sandwich Partitioning
-        plan.tier1_hot_vram_mb = vram_for_weights_mb;
+        // Multi-tier Sandwich Partitioning
+        plan.gpu_layers = std::min(plan.total_layers, rec.recommended_gpu_layers);
+        plan.tier1_hot_vram_mb = static_cast<uint64_t>(plan.gpu_layers * fp.mb_per_dense_layer);
+        plan.tier2_warm_ddr5_mb = rec.warm_ddr5_pool_mb;
 
-        // Approximate GPU layers
-        double fraction_on_gpu = static_cast<double>(plan.tier1_hot_vram_mb) / plan.model_total_mb;
-        plan.gpu_layers = static_cast<int>(fraction_on_gpu * plan.total_layers);
-
-        uint64_t remaining_mb = plan.model_total_mb - plan.tier1_hot_vram_mb;
-
-        // Apply Technique #42 (70% Max Host RAM Rule)
-        uint64_t max_warm_ddr5_mb = profile.ram.max_safe_allocation_mb;
-
-        if (remaining_mb <= max_warm_ddr5_mb) {
-            plan.tier2_warm_ddr5_mb = remaining_mb;
-            plan.tier3_cold_nvme_mb = 0;
-        } else {
-            plan.tier2_warm_ddr5_mb = max_warm_ddr5_mb;
-            plan.tier3_cold_nvme_mb = remaining_mb - max_warm_ddr5_mb;
-        }
+        uint64_t allocated_mb = plan.tier1_hot_vram_mb + plan.tier2_warm_ddr5_mb;
+        plan.tier3_cold_nvme_mb = (fp.total_weights_mb > allocated_mb) ? (fp.total_weights_mb - allocated_mb) : 0;
     }
 
-    // 4. Scenario Simulation (Tokens / Second)
-    // Estimate active parameter size per token
+    // 5. Scenario Simulation (Tokens / Second)
     double active_fraction = 1.0;
     if (is_moe && expert_count > 0 && active_experts > 0) {
-        // In MoE, active params are shared dense weights + (active_experts / expert_count) * MoE weights
         double dense_ratio = 0.20;
         double moe_ratio = 0.80;
         active_fraction = dense_ratio + (moe_ratio * static_cast<double>(active_experts) / expert_count);
     }
     double active_model_mb = plan.model_total_mb * active_fraction;
 
-    // Best-Case: Active params fit fully in VRAM
-    // Decode speed = (VRAM Bandwidth GB/s * 1024) / Active MB * compute_efficiency
     double gpu_bw_mbps = profile.gpu.est_bandwidth_gbps * 1024.0;
     plan.est_tokens_sec_best = std::min(45.0, (gpu_bw_mbps / (active_model_mb + 100.0)) * 0.28);
 
-    // Hybrid-Case: Sandwich Tier 1 + Tier 2 WARM pool
-    // Bound by dual-channel DDR5 streaming + GPU compute
     double ddr5_bw_mbps = profile.ram.est_bandwidth_gbps * 1024.0;
     plan.est_tokens_sec_hybrid = std::min(22.0, (ddr5_bw_mbps / (active_model_mb * 0.75 + 100.0)) * 0.32);
 
-    // Worst-Case: Cold expert thrashing to NVMe SSD
     double nvme_bw_mbps = profile.storage.est_read_bandwidth_mbps;
     double cold_expert_mb_per_tok = (plan.tier3_cold_nvme_mb > 0) ? (active_model_mb * 0.30) : 50.0;
     plan.est_tokens_sec_worst = std::max(2.5, (nvme_bw_mbps / cold_expert_mb_per_tok) * 0.20);
 
-    // Recommended CLI flags synthesis
+    // 6. Synthesize Recommended CLI Flags
     std::ostringstream flags;
     if (plan.tier2_warm_ddr5_mb == 0 && plan.tier3_cold_nvme_mb == 0) {
-        // Fits 100% in VRAM
         flags << "-ngl 99 ";
     } else {
-        // Multi-tier: Enforce 7,100 MB Wayland VRAM Guard by setting target free margin
         uint64_t free_margin_mb = (profile.gpu.total_vram_mb > profile.gpu.wayland_guard_vram_mb)
                                     ? (profile.gpu.total_vram_mb - profile.gpu.wayland_guard_vram_mb)
                                     : 1024;
@@ -578,6 +570,8 @@ TieringPlan HardwareProfiler::calculate_tiering(
     flags << "-fa ";
     if (kv_quant == "turbo4") {
         flags << "-ctk turbo4 -ctv turbo4 ";
+    } else if (kv_quant == "turbo-kvran") {
+        flags << "-ctk turbo4 -ctv turbo4 --turbo-kvran ";
     } else if (kv_quant == "turbo2") {
         flags << "-ctk turbo2 -ctv turbo2 ";
     } else if (kv_quant == "q8_0") {
@@ -585,6 +579,17 @@ TieringPlan HardwareProfiler::calculate_tiering(
     } else if (kv_quant == "f16") {
         flags << "-ctk f16 -ctv f16 ";
     }
+
+    if (rec.enable_chunked_prefill) {
+        flags << "--chunked-prefill -ub " << rec.prefill_chunk_size << " ";
+    }
+    if (rec.enable_asym_prefetch) {
+        flags << "--asym-prefetch ";
+    }
+    if (rec.enable_ram_cache) {
+        flags << "--ram-cache-mb " << rec.ram_cache_budget_mb << " ";
+    }
+    flags << "--dynamic-watermark ";
 
     plan.recommended_flags = flags.str();
     return plan;

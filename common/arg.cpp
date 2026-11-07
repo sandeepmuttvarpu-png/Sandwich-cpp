@@ -4976,6 +4976,61 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.peer_fallback = false;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    // Dynamic Memory Watermarking, Asymmetric Prefetch, and Host RAM Cache (Techniques #73 - #76)
+    add_opt(common_arg(
+        {"--dynamic-watermark"},
+        "enable Technique #73 Dynamic Memory Watermarking System (live HWM 85%, LWM 70% tracking)",
+        [](common_params & params) {
+            params.dynamic_watermark = true;
+            setenv("SANDWICH_DYNAMIC_WATERMARK", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DYNAMIC_WATERMARK"));
+
+    add_opt(common_arg(
+        {"--no-dynamic-watermark"},
+        "disable Dynamic Memory Watermarking System",
+        [](common_params & params) {
+            params.dynamic_watermark = false;
+            setenv("SANDWICH_DYNAMIC_WATERMARK", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--asym-prefetch"},
+        "enable Technique #74 Asymmetric Parallel Prefetch (pinned DMA for shared weights + async MoE lookahead)",
+        [](common_params & params) {
+            params.asym_prefetch = true;
+            setenv("SANDWICH_ASYM_PREFETCH", "1", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_ASYM_PREFETCH"));
+
+    add_opt(common_arg(
+        {"--no-asym-prefetch"},
+        "disable Asymmetric Parallel Prefetch",
+        [](common_params & params) {
+            params.asym_prefetch = false;
+            setenv("SANDWICH_ASYM_PREFETCH", "0", 1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--ram-cache-mb", "--ram-cache"}, "MB",
+        "set Technique #75 Dedicated Host RAM Caching Layer budget in MiB (default: 2048)",
+        [](common_params & params, int value) {
+            params.ram_cache_mb = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_RAM_CACHE_MB"));
+
+    add_opt(common_arg(
+        {"--prefill-chunk-size"}, "N",
+        "set Technique #76 Chunked Prefill micro-chunk size (default: 128 for MoE, 256/512 for dense)",
+        [](common_params & params, int value) {
+            params.prefill_chunk_size = value;
+            params.chunked_prefill = true;
+            params.n_ubatch = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PREFILL_CHUNK_SIZE"));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

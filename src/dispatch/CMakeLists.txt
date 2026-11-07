@@ -3,6 +3,10 @@ set(TARGET sandwich-dispatch)
 add_library(${TARGET} STATIC
     hardware_profiler.cpp
     model_scanner.cpp
+    ram_estimator.cpp
+    memory_watermark.cpp
+    prefetch_scheduler.cpp
+    ram_cache_layer.cpp
     tui_wizard.cpp
     router.cpp
 )

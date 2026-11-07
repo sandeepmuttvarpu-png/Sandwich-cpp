@@ -2,6 +2,7 @@
 
 #include "hardware_profiler.hpp"
 #include "model_scanner.hpp"
+#include "memory_watermark.hpp"
 
 #include <string>
 #include <vector>
@@ -57,6 +58,11 @@ struct WizardConfig {
     bool            split_kv              = false;
     bool            warm_pool             = true;
     bool            io_uring              = true;
+    bool            chunked_prefill       = true;
+    uint32_t        prefill_chunk_size    = 128;
+    bool            dynamic_watermark     = true;
+    bool            asym_prefetch         = true;
+    bool            ram_cache_layer       = true;
     TieringPlan     tiering;
     std::string     synthesized_command;
     bool            should_launch         = false;
@@ -81,6 +87,7 @@ struct LiveHardwareStats {
     int      cpu_temp_c    = 45;
     double   disk_free_gb  = 0.0;
     double   disk_total_gb = 0.0;
+    std::string watermark_status = "NORMAL [Safe]";
 };
 
 class TUIWizard {
