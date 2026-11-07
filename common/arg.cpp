@@ -5015,7 +5015,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     add_opt(common_arg(
-        {"--ram-cache-mb", "--ram-cache"}, "MB",
+        {"--ram-cache", "--ram-cache-mb"}, "MB",
         "set Technique #75 Dedicated Host RAM Caching Layer budget in MiB (default: 2048)",
         [](common_params & params, int value) {
             params.ram_cache_mb = value;
