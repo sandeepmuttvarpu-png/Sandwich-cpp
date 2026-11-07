@@ -2634,7 +2634,7 @@ private:
         if (slot.prompt.checkpoints.empty()) {
             return true;
         }
-        std::ofstream ofs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::app);
+        std::ofstream ofs(std::filesystem::path(filepath), std::ios::binary | std::ios::app);
         if (!ofs) {
             SLT_WRN(slot, "failed to append context checkpoints to '%s'\n", filepath.c_str());
             return false;
@@ -2665,7 +2665,7 @@ private:
 
     // returns the number of bytes consumed, 0 if there is no usable appendix
     size_t load_slot_checkpoints(const std::string & filepath, size_t offset, server_slot & slot) const {
-        std::ifstream ifs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::ate);
+        std::ifstream ifs(std::filesystem::path(filepath), std::ios::binary | std::ios::ate);
         const size_t file_size = ifs ? (size_t) ifs.tellg() : 0;
         if (!ifs || file_size < offset || !ifs.seekg(offset)) {
             return 0;

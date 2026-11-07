@@ -233,7 +233,7 @@ static std::string get_repo_commit(const std::string & repo_id,
                 LOG_WRN("%s: skip invalid commit: %s\n", __func__, _commit.c_str());
                 continue;
             }
-            const fs::path candidate = fs::u8path(_name);
+            const fs::path candidate = fs::path(_name);
 
             if (!is_valid_subpath(refs_path, candidate)) {
                 LOG_WRN("%s: skip invalid branch: %s\n", __func__, _name.c_str());
@@ -308,7 +308,7 @@ hf_files get_repo_files(const std::string & repo_id,
             file.repo_id = repo_id;
             file.path = item["path"].get<std::string>();
 
-            const fs::path subpath = fs::u8path(file.path);
+            const fs::path subpath = fs::path(file.path);
 
             if (!is_valid_subpath(commit_path, subpath)) {
                 LOG_WRN("%s: skip invalid path: %s\n", __func__, file.path.c_str());
@@ -441,8 +441,8 @@ std::string finalize_file(const hf_file & file) {
     static std::atomic<bool> symlinks_disabled{false};
 
     std::error_code ec;
-    fs::path local_path = fs::u8path(file.local_path);
-    fs::path final_path = fs::u8path(file.final_path);
+    fs::path local_path = fs::path(file.local_path);
+    fs::path final_path = fs::path(file.final_path);
 
     if (local_path == final_path || fs::exists(final_path, ec)) {
         return file.final_path;
