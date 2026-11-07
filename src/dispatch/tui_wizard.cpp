@@ -364,15 +364,10 @@ void TUIWizard::recompute_tiering_and_command() {
         state.use_speculative = false;
     }
 
-    // Context Length resolution
+    // Context Length resolution (presets only)
     static const int preset_ctx[] = {2048, 4096, 8192, 16384, 32768, 65536, 131072};
-    if (context_cursor < 7) {
-        state.context_length = preset_ctx[context_cursor];
-    } else {
-        int custom_val = std::atoi(context_custom_str.c_str());
-        if (custom_val > 0) state.context_length = custom_val;
-        else state.context_length = 65536;
-    }
+    if (context_cursor >= 7) context_cursor = 6;
+    state.context_length = preset_ctx[context_cursor];
 
     // KV Quant resolution
     static const char * quant_keys[] = {
@@ -439,11 +434,7 @@ void TUIWizard::recompute_tiering_and_command() {
             break;
         case ActiveSection::CONTEXT_QUANT:
             if (cq_subfocus == 0) {
-                if (context_cursor == 7) {
-                    last_hovered_hint = "Custom Context Window: " + std::to_string(state.context_length) + " ──▶ [Space] Edit custom token limit";
-                } else {
-                    last_hovered_hint = "Context Window: " + std::to_string(state.context_length) + " tokens ──▶ Adds: -c " + std::to_string(state.context_length);
-                }
+                last_hovered_hint = "Context Window: " + std::to_string(state.context_length) + " tokens ──▶ Adds: -c " + std::to_string(state.context_length);
             } else {
                 if (state.kv_quant == "turbo-kvran") {
                     last_hovered_hint = "KV Quant: Turbo-KVarN Fused Hybrid ──▶ Adds: -ctk turbo4 -ctv turbo4 --turbo-kvran";
@@ -553,7 +544,7 @@ void TUIWizard::render_dashboard() {
             "  [↑] / [↓]             Browse models / navigate flags grid",
             "  [←] / [→]             Horizontally scroll drafters, context, & quant",
             "  [Tab] / [Shift+Tab]   Switch sections: Model ➔ Drafter ➔ Context ➔ Flags",
-            "  [Space]               Toggle flag checkbox / edit custom context",
+            "  [Space]               Toggle flag checkbox",
             "  [/]                   Quick-search filter for model catalog",
             "  [R]                   Rescan local GGUF models on disk",
             "  [S]                   Save current setup to ~/.config/sandwich/presets",
@@ -751,19 +742,19 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
     // 3. CONTEXT & KV QUANTIZATION (Horizontal Scrolling + Custom)
     // ─────────────────────────────────────────────────────────────
     bool act_cq = (active_section == ActiveSection::CONTEXT_QUANT);
-    print_box_header(act_cq ? "3. CONTEXT & KV QUANT (Active: [←/→] Scroll, [Space] Edit)" : "3. CONTEXT & KV QUANT", act_cq);
+    print_box_header(act_cq ? "3. CONTEXT & KV QUANT (Active: [←/→] Horizontal Scroll)" : "3. CONTEXT & KV QUANT", act_cq);
 
-    // Row 1: Context Lengths
+    // Row 1: Context Lengths (Presets: 2K to 128K)
     out << "\033[" << r++ << ";" << start_col << "H" << (act_cq ? CLR_GOLD : CLR_DARK_GRAY) << "│ " << CLR_RESET;
     out << (act_cq && cq_subfocus == 0 ? CLR_LIGHT_YEL : CLR_BOLD) << "Ctx:   " << CLR_RESET;
 
     static const char * ctx_labels[] = {
         "2K", "4K", "8K", "16K", "32K", "64K", "128K"
     };
-    size_t total_ctx_options = 8; // 0..6 presets + 7 Custom
+    size_t total_ctx_options = 7;
     if (context_cursor >= total_ctx_options) context_cursor = total_ctx_options - 1;
 
-    const size_t visible_ctx_count = 5;
+    const size_t visible_ctx_count = std::min((size_t)7, total_ctx_options);
     if (context_cursor < context_page_offset) {
         context_page_offset = context_cursor;
     } else if (context_cursor >= context_page_offset + visible_ctx_count) {
@@ -780,13 +771,7 @@ void TUIWizard::render_left_panel(std::ostringstream & out, int start_row, int s
         bool is_cur = (context_cursor == c_idx);
         bool focused = (act_cq && cq_subfocus == 0 && is_cur);
 
-        std::string pill;
-        if (c_idx == 7) {
-            if (context_custom_mode) pill = "Custom: " + context_custom_str + "█";
-            else pill = "Custom: " + context_custom_str;
-        } else {
-            pill = ctx_labels[c_idx];
-        }
+        std::string pill = ctx_labels[c_idx];
 
         if (focused) {
             out << BG_YEL << "[" << pill << "]" << CLR_RESET << " ";
@@ -1040,21 +1025,6 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
         return;
     }
 
-    if (context_custom_mode) {
-        if (ev.code == KeyCode::ENTER || ev.code == KeyCode::ESCAPE) {
-            context_custom_mode = false;
-            int val = std::atoi(context_custom_str.c_str());
-            if (val > 0) state.context_length = val;
-            log_event("Custom context set to: " + std::to_string(state.context_length));
-        } else if (ev.code == KeyCode::BACKSPACE) {
-            if (!context_custom_str.empty()) context_custom_str.pop_back();
-        } else if (ev.code == KeyCode::CHAR && ev.ch >= '0' && ev.ch <= '9') {
-            if (context_custom_str.size() < 8) context_custom_str.push_back(ev.ch);
-        }
-        recompute_tiering_and_command();
-        return;
-    }
-
     if (model_filter_mode) {
         if (ev.code == KeyCode::ENTER || ev.code == KeyCode::ESCAPE) {
             model_filter_mode = false;
@@ -1101,11 +1071,6 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                 log_event("Rescan done: " + std::to_string(catalog.models.size()) + " models found.");
             } else if (ev.ch == 's' || ev.ch == 'S') {
                 save_preset();
-            } else if (active_section == ActiveSection::CONTEXT_QUANT && cq_subfocus == 0 && context_cursor == 7 && ev.ch >= '0' && ev.ch <= '9') {
-                // Quick start custom context typing
-                context_custom_mode = true;
-                context_custom_str.clear();
-                context_custom_str.push_back(ev.ch);
             }
             break;
         case KeyCode::UP:
@@ -1150,7 +1115,7 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                     log_event("Drafter set to: " + catalog.drafters[drafter_cursor - 1].filename);
                 }
             } else if (active_section == ActiveSection::CONTEXT_QUANT) {
-                if (cq_subfocus == 0 && context_cursor < 7) context_cursor++;
+                if (cq_subfocus == 0 && context_cursor < 6) context_cursor++;
                 else if (cq_subfocus == 1 && kv_quant_cursor < 7) kv_quant_cursor++;
             } else if (active_section == ActiveSection::OPTIMIZATION_FLAGS) {
                 if (flags_cursor % 2 == 0 && flags_cursor + 1 < 12) flags_cursor++;
@@ -1172,9 +1137,6 @@ void TUIWizard::handle_input(const KeyEvent & ev) {
                     case 10: state.warm_pool    = !state.warm_pool;     log_event(std::string("WARM DDR5 Pool: ") + (state.warm_pool ? "ON" : "OFF")); break;
                     case 11: state.io_uring     = !state.io_uring;      log_event(std::string("io_uring Direct DMA: ") + (state.io_uring ? "ON" : "OFF")); break;
                 }
-            } else if (active_section == ActiveSection::CONTEXT_QUANT && cq_subfocus == 0 && context_cursor == 7) {
-                context_custom_mode = true;
-                log_event("Entering custom context edit mode.");
             } else if (active_section == ActiveSection::MODELS) {
                 log_event("Selected model: " + catalog.models[model_cursor].display_name);
             }
@@ -1207,13 +1169,13 @@ bool TUIWizard::run(WizardConfig & out_config) {
 
         KeyEvent ev = read_key();
         if (ev.code != KeyCode::UNKNOWN) {
-            if (ev.code == KeyCode::ESCAPE && !help_overlay_active && !model_filter_mode && !context_custom_mode) {
+            if (ev.code == KeyCode::ESCAPE && !help_overlay_active && !model_filter_mode) {
                 running = false;
                 state.should_launch = false;
                 break;
             }
 
-            if (ev.code == KeyCode::CHAR && (ev.ch == 'q' || ev.ch == 'Q') && !model_filter_mode && !help_overlay_active && !context_custom_mode) {
+            if (ev.code == KeyCode::CHAR && (ev.ch == 'q' || ev.ch == 'Q') && !model_filter_mode && !help_overlay_active) {
                 running = false;
                 state.should_launch = false;
                 break;

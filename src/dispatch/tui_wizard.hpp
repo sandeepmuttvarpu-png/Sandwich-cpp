@@ -144,11 +144,9 @@ private:
     size_t drafter_cursor = 0; // 0=None, 1..N drafters
     size_t drafter_page_offset = 0;
 
-    // Context & Quant navigation (horizontal scrolling + custom)
+    // Context & Quant navigation (horizontal scrolling)
     size_t context_cursor = 5; // default: 5 -> 65536 (64k)
     size_t context_page_offset = 0;
-    bool   context_custom_mode = false;
-    std::string context_custom_str = "65536";
 
     size_t kv_quant_cursor = 0; // 0..7
     size_t kv_quant_page_offset = 0;
