@@ -4,6 +4,7 @@
 #include "ram_cache_layer.hpp"
 #include "h2o_cache_compressor.hpp"
 #include "paged_block_allocator.hpp"
+#include "flash_decoding_scheduler.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -329,6 +330,50 @@ static void test_paged_block_allocator() {
     printf("  [PASS] test_paged_block_allocator\n");
 }
 
+static void test_flash_decoding_scheduler() {
+    printf("[test_flash_decoding_scheduler] Starting...\n");
+
+    // Case 1: Short context (512 tokens) -> Standard FlashAttention (disabled)
+    FlashDecodingPlan p_short = FlashDecodingScheduler::calculate_plan(512, 32, 1024, 256);
+    SANDWICH_TEST_CHECK(!p_short.enabled);
+    SANDWICH_TEST_CHECK(p_short.num_splits == 1);
+    SANDWICH_TEST_CHECK(p_short.active_sms_utilized == 1);
+
+    // Case 2: Long context (65,536 tokens on 32-SM RTX 5050 Mobile)
+    FlashDecodingPlan p_long = FlashDecodingScheduler::calculate_plan(65536, 32, 1024, 256);
+    SANDWICH_TEST_CHECK(p_long.enabled);
+    SANDWICH_TEST_CHECK(p_long.num_splits == 256); // 65536 / 256 = 256 chunks
+    SANDWICH_TEST_CHECK(p_long.active_sms_utilized == 32); // All 32 SMs saturated!
+    SANDWICH_TEST_CHECK(p_long.theoretical_speedup > 20.0);
+    printf("  Flash-Decoding 64k: %s\n", p_long.diagnostics.c_str());
+
+    // Case 3: Logarithmic reduction merge of partial reductions
+    size_t head_dim = 128;
+    std::vector<PartialAttentionReduction> partials;
+
+    // Chunk 0: max logit 2.0, sum 10.0, unnormalized output = 1.0f * 10.0 = 10.0f
+    PartialAttentionReduction r0;
+    r0.max_logit = 2.0f;
+    r0.sum_exp = 10.0f;
+    r0.accum_out.assign(head_dim, 10.0f);
+    partials.push_back(r0);
+
+    // Chunk 1: max logit 5.0 (dominant chunk!), sum 20.0, unnormalized output = 3.0f * 20.0 = 60.0f
+    PartialAttentionReduction r1;
+    r1.max_logit = 5.0f;
+    r1.sum_exp = 20.0f;
+    r1.accum_out.assign(head_dim, 60.0f);
+    partials.push_back(r1);
+
+    std::vector<float> merged = FlashDecodingScheduler::merge_partial_reductions(partials, head_dim);
+    SANDWICH_TEST_CHECK(merged.size() == head_dim);
+    // Since chunk 1 has max_logit 5.0 vs 2.0 (e^(2-5) = e^-3 ~= 0.05), chunk 1 heavily dominates output
+    SANDWICH_TEST_CHECK(merged[0] > 2.8f && merged[0] <= 3.0f);
+    printf("  Logarithmic reduction verified: merged head[0] = %.4f (expected ~2.99f)\n", merged[0]);
+
+    printf("  [PASS] test_flash_decoding_scheduler\n");
+}
+
 int main() {
     printf("=== Running sandwich.cpp Dispatch Subsystem Unit Tests ===\n");
     test_ram_estimator();
@@ -337,6 +382,7 @@ int main() {
     test_ram_cache_layer();
     test_h2o_cache_compressor();
     test_paged_block_allocator();
+    test_flash_decoding_scheduler();
     printf("=== All Sandwich Dispatch Tests Passed Successfully! ===\n");
     return 0;
 }

@@ -5057,6 +5057,31 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.h2o_compression = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--flash-decoding"},
+        "enable Sequence-Parallel Flash-Decoding across GPU SMs for long context decode",
+        [](common_params & params) {
+            params.flash_decoding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--no-flash-decoding"},
+        "disable Sequence-Parallel Flash-Decoding",
+        [](common_params & params) {
+            params.flash_decoding = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--flash-decoding-chunk-size"}, "N",
+        "Sequence-Parallel Flash-Decoding partition chunk size in tokens (default: 256)",
+        [](common_params & params, int value) {
+            params.flash_decoding_chunk_size = value;
+            params.flash_decoding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

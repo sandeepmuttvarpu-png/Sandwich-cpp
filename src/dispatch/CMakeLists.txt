@@ -9,6 +9,7 @@ add_library(${TARGET} STATIC
     ram_cache_layer.cpp
     h2o_cache_compressor.cpp
     paged_block_allocator.cpp
+    flash_decoding_scheduler.cpp
     tui_wizard.cpp
     router.cpp
 )

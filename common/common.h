@@ -691,6 +691,8 @@ struct common_params {
     bool        h2o_compression            = false; // [Technique #67] Heavy Hitter Oracle (H2O) dynamic KV cache eviction
     int32_t     h2o_budget                 = 2048;  // Total active KV cache budget (sink + heavy + window)
     int32_t     h2o_heavy_hitters          = 1024;  // Number of dynamic heavy hitter tokens to retain
+    bool        flash_decoding             = true;  // [Technique #79] Sequence-Parallel Flash-Decoding across SMs
+    int32_t     flash_decoding_chunk_size  = 256;   // Flash-Decoding sequence partition size (default: 256)
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
