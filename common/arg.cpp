@@ -2481,7 +2481,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
-        {"-rtr", "--run-time-repack", "--repack"},
+        {"-rtr", "--repack", "--run-time-repack"},
         {"-nr", "--no-repack"},
         string_format("whether to enable weight repacking (default: %s). CAUTION: -rtr must NOT be used for k-quants in hybrid mode!", params.no_extra_bufts ? "disabled" : "enabled"),
         [](common_params & params, bool value) {
@@ -4190,14 +4190,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     //
 
     add_opt(common_arg(
-        {"--spec-draft-hf", "-hfd", "-hfrd", "--hf-repo-draft"}, "<user>/<model>[:quant]",
+        {"-hfd", "-hfrd", "--spec-draft-hf", "--hf-repo-draft"}, "<user>/<model>[:quant]",
         "Same as --hf-repo, but for the draft model (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.mparams.hf_repo = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_HF_REPO"));
     add_opt(common_arg(
-        {"--spec-draft-threads", "-td", "--threads-draft"}, "N",
+        {"-td", "--threads-draft", "--spec-draft-threads"}, "N",
         "number of threads to use during generation (default: same as --threads)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.n_threads = value;
@@ -4207,7 +4207,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-threads-batch", "-tbd", "--threads-batch-draft"}, "N",
+        {"-tbd", "--threads-batch-draft", "--spec-draft-threads-batch"}, "N",
         "number of threads to use during batch and prompt processing (default: same as --threads-draft)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams_batch.n_threads = value;
@@ -4217,7 +4217,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-mask", "-Cd", "--cpu-mask-draft"}, "M",
+        {"-Cd", "--cpu-mask-draft", "--spec-draft-cpu-mask"}, "M",
         "Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)",
         [](common_params & params, const std::string & mask) {
             params.speculative.draft.cpuparams.mask_valid = true;
@@ -4227,7 +4227,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-range", "-Crd", "--cpu-range-draft"}, "lo-hi",
+        {"-Crd", "--cpu-range-draft", "--spec-draft-cpu-range"}, "lo-hi",
         "Ranges of CPUs for affinity. Complements --cpu-mask-draft",
         [](common_params & params, const std::string & range) {
             params.speculative.draft.cpuparams.mask_valid = true;
@@ -4237,14 +4237,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-strict", "--cpu-strict-draft"}, "<0|1>",
+        {"--cpu-strict-draft", "--spec-draft-cpu-strict"}, "<0|1>",
         "Use strict CPU placement for draft model (default: same as --cpu-strict)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.strict_cpu = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-prio", "--prio-draft"}, "N",
+        {"--prio-draft", "--spec-draft-prio"}, "N",
         string_format("set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: %d)\n", params.speculative.draft.cpuparams.priority),
         [](common_params & params, int prio) {
             if (prio < 0 || prio > 3) {
@@ -4254,14 +4254,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-poll", "--poll-draft"}, "<0|1>",
+        {"--poll-draft", "--spec-draft-poll"}, "<0|1>",
         "Use polling to wait for draft model work (default: same as --poll)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.poll = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-mask-batch", "-Cbd", "--cpu-mask-batch-draft"}, "M",
+        {"-Cbd", "--cpu-mask-batch-draft", "--spec-draft-cpu-mask-batch"}, "M",
         "Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)",
         [](common_params & params, const std::string & mask) {
             params.speculative.draft.cpuparams_batch.mask_valid = true;
@@ -4271,7 +4271,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-range-batch", "-Crbd", "--cpu-range-batch-draft"}, "lo-hi",
+        {"-Crbd", "--cpu-range-batch-draft", "--spec-draft-cpu-range-batch"}, "lo-hi",
         "Ranges of CPUs for affinity. Complements --cpu-mask-draft-batch)",
         [](common_params & params, const std::string & range) {
             params.speculative.draft.cpuparams_batch.mask_valid = true;
@@ -4281,14 +4281,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-strict-batch", "--cpu-strict-batch-draft"}, "<0|1>",
+        {"--cpu-strict-batch-draft", "--spec-draft-cpu-strict-batch"}, "<0|1>",
         "Use strict CPU placement for draft model (default: --cpu-strict-draft)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams_batch.strict_cpu = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-prio-batch", "--prio-batch-draft"}, "N",
+        {"--prio-batch-draft", "--spec-draft-prio-batch"}, "N",
         string_format("set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: %d)\n", params.speculative.draft.cpuparams_batch.priority),
         [](common_params & params, int prio) {
             if (prio < 0 || prio > 3) {
@@ -4298,14 +4298,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-poll-batch", "--poll-batch-draft"}, "<0|1>",
+        {"--poll-batch-draft", "--spec-draft-poll-batch"}, "<0|1>",
         "Use polling to wait for draft model work (default: --poll-draft)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams_batch.poll = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-type-k", "-ctkd", "--cache-type-k-draft"}, "TYPE",
+        {"-ctkd", "--spec-draft-type-k", "--cache-type-k-draft"}, "TYPE",
         string_format(
             "KV cache data type for K for the draft model\n"
             "allowed values: %s\n"
@@ -4318,7 +4318,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K"));
     add_opt(common_arg(
-        {"--spec-draft-type-v", "-ctvd", "--cache-type-v-draft"}, "TYPE",
+        {"-ctvd", "--spec-draft-type-v", "--cache-type-v-draft"}, "TYPE",
         string_format(
             "KV cache data type for V for the draft model\n"
             "allowed values: %s\n"
@@ -4331,20 +4331,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V"));
     add_opt(common_arg(
-        {"--spec-draft-override-tensor", "-otd", "--override-tensor-draft"}, "<tensor name pattern>=<buffer type>,...",
+        {"-otd", "--override-tensor-draft", "--spec-draft-override-tensor"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type for draft model", [](common_params & params, const std::string & value) {
             parse_tensor_buffer_overrides(value, params.speculative.draft.tensor_buft_overrides);
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draft-cpu-moe", "-cmoed", "--cpu-moe-draft"},
+        {"-cmoed", "--cpu-moe-draft", "--spec-draft-cpu-moe"},
         "keep all Mixture of Experts (MoE) weights in the CPU for the draft model",
         [](common_params & params) {
             params.speculative.draft.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_CPU_MOE"));
     add_opt(common_arg(
-        {"--spec-draft-n-cpu-moe", "--spec-draft-ncmoe", "-ncmoed", "--n-cpu-moe-draft"}, "N",
+        {"-ncmoed", "--n-cpu-moe-draft", "--spec-draft-ncmoe", "--spec-draft-n-cpu-moe"}, "N",
         "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model",
         [](common_params & params, int value) {
             if (value < 0) {
@@ -4554,7 +4554,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--turbo-varn", "--turbo-vran", "--turboquant-varn", "--turbo-kvran"},
+        {"--turbo-varn", "--turbo-vran", "--turbo-kvran", "--turboquant-varn"},
         "enable Turbo-KVarN Unified Hybrid (Closed-Form Dual-Axis Variance Normalization for TurboQuant KV cache)",
         [](common_params & params) {
             params.turboquant_varn = true;
@@ -4562,7 +4562,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_TURBOQUANT_VARN"));
     add_opt(common_arg(
-        {"--no-turbo-varn", "--no-turbo-vran", "--no-turboquant-varn", "--no-turbo-kvran"},
+        {"--no-turbo-varn", "--no-turbo-vran", "--no-turbo-kvran", "--no-turboquant-varn"},
         "disable Turbo-KVarN dual-axis variance normalization",
         [](common_params & params) {
             params.turboquant_varn = false;
@@ -5141,14 +5141,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_RATES"));
 
     add_opt(common_arg(
-        {"--spec-draft-p-split", "--draft-p-split"}, "P",
+        {"--draft-p-split", "--spec-draft-p-split"}, "P",
         string_format("speculative decoding split probability (default: %.2f)", (double)params.speculative.draft.p_split),
         [](common_params & params, const std::string & value) {
             params.speculative.draft.p_split = std::stof(value);
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_P_SPLIT"));
     add_opt(common_arg(
-        {"--spec-draft-p-min", "--draft-p-min"}, "P",
+        {"--draft-p-min", "--spec-draft-p-min"}, "P",
         string_format("minimum speculative decoding probability (greedy) (default: %.2f)", (double)params.speculative.draft.p_min),
         [](common_params & params, const std::string & value) {
             params.speculative.draft.p_min = std::stof(value);
@@ -5179,7 +5179,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_SAMPLING"));
     add_opt(common_arg(
-        {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
+        {"-devd", "--device-draft", "--spec-draft-device"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
@@ -5188,7 +5188,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     GGML_ASSERT(params.speculative.draft.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
-        {"--spec-draft-ngl", "-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "N",
+        {"-ngld", "--spec-draft-ngl", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "N",
         string_format("max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)",
             params.speculative.draft.n_gpu_layers == -1 ? "auto" : "all"),
         [](common_params & params, const std::string & value) {
