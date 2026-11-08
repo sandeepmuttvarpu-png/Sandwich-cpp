@@ -5,13 +5,16 @@
 #include "h2o_cache_compressor.hpp"
 #include "paged_block_allocator.hpp"
 #include "flash_decoding_scheduler.hpp"
+#include "gpudirect_storage.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <unistd.h>
 
 #define SANDWICH_TEST_CHECK(cond) \
     do { \
@@ -374,6 +377,126 @@ static void test_flash_decoding_scheduler() {
     printf("  [PASS] test_flash_decoding_scheduler\n");
 }
 
+static void test_gpudirect_storage() {
+    printf("[test_gpudirect_storage] Starting...\n");
+
+    // 1. Test 4KB alignment arithmetic
+    uint64_t aligned_off = 0;
+    size_t aligned_len = 0;
+    size_t pad = 0;
+
+    GDSManager::align_bounds(0, 4096, 4096, aligned_off, aligned_len, pad);
+    SANDWICH_TEST_CHECK(aligned_off == 0);
+    SANDWICH_TEST_CHECK(aligned_len == 4096);
+    SANDWICH_TEST_CHECK(pad == 0);
+
+    GDSManager::align_bounds(100, 500, 4096, aligned_off, aligned_len, pad);
+    SANDWICH_TEST_CHECK(aligned_off == 0);
+    SANDWICH_TEST_CHECK(aligned_len == 4096);
+    SANDWICH_TEST_CHECK(pad == 100);
+
+    GDSManager::align_bounds(4500, 8192, 4096, aligned_off, aligned_len, pad);
+    SANDWICH_TEST_CHECK(aligned_off == 4096);
+    SANDWICH_TEST_CHECK(aligned_len == 12288);
+    SANDWICH_TEST_CHECK(pad == (4500 - 4096));
+
+    // 2. Test initialization and diagnostics
+    GDSConfig cfg;
+    cfg.enabled = true;
+    GDSManager gds(cfg);
+    SANDWICH_TEST_CHECK(gds.is_active());
+
+    GDSStatus st = gds.get_status();
+    SANDWICH_TEST_CHECK(st.enabled);
+    SANDWICH_TEST_CHECK(!st.backend_name.empty());
+    printf("  Initial GDS Backend: %s\n", st.backend_name.c_str());
+
+    // 3. Test direct DMA transfer on a temporary file
+    char tmp_path[] = "/tmp/sandwich_gds_test_XXXXXX";
+    int tmp_fd = mkstemp(tmp_path);
+    SANDWICH_TEST_CHECK(tmp_fd >= 0);
+
+    // Populate file with 16KB of pseudo-random known data
+    const size_t file_size = 16384;
+    std::vector<uint8_t> test_data(file_size);
+    for (size_t i = 0; i < file_size; ++i) {
+        test_data[i] = static_cast<uint8_t>((i * 31 + 17) & 0xFF);
+    }
+    ssize_t written = write(tmp_fd, test_data.data(), file_size);
+    SANDWICH_TEST_CHECK(written == static_cast<ssize_t>(file_size));
+    fsync(tmp_fd);
+
+    // Test Case A: Aligned 4096 byte read
+    std::vector<uint8_t> read_buf_a(4096, 0);
+    GDSTransferRequest req_a;
+    req_a.fd = tmp_fd;
+    req_a.file_offset = 4096;
+    req_a.length = 4096;
+    req_a.dest_ptr = read_buf_a.data();
+    req_a.is_gpu_vram = false;
+
+    GDSTransferResult res_a = gds.transfer(req_a);
+    SANDWICH_TEST_CHECK(res_a.success);
+    SANDWICH_TEST_CHECK(res_a.bytes_transferred == 4096);
+    SANDWICH_TEST_CHECK(std::memcmp(read_buf_a.data(), test_data.data() + 4096, 4096) == 0);
+
+    // Test Case B: Unaligned read (offset 512, length 1024)
+    std::vector<uint8_t> read_buf_b(1024, 0);
+    GDSTransferRequest req_b;
+    req_b.fd = tmp_fd;
+    req_b.file_offset = 512;
+    req_b.length = 1024;
+    req_b.dest_ptr = read_buf_b.data();
+    req_b.is_gpu_vram = false;
+
+    GDSTransferResult res_b = gds.transfer(req_b);
+    SANDWICH_TEST_CHECK(res_b.success);
+    SANDWICH_TEST_CHECK(res_b.bytes_transferred == 1024);
+    SANDWICH_TEST_CHECK(std::memcmp(read_buf_b.data(), test_data.data() + 512, 1024) == 0);
+
+    // 4. Test Batch DMA transfers
+    std::vector<uint8_t> batch_buf(4096 * 2, 0);
+    std::vector<GDSTransferRequest> batch_reqs(2);
+    batch_reqs[0].fd = tmp_fd;
+    batch_reqs[0].file_offset = 0;
+    batch_reqs[0].length = 4096;
+    batch_reqs[0].dest_ptr = batch_buf.data();
+
+    batch_reqs[1].fd = tmp_fd;
+    batch_reqs[1].file_offset = 8192;
+    batch_reqs[1].length = 4096;
+    batch_reqs[1].dest_ptr = batch_buf.data() + 4096;
+
+    auto batch_results = gds.transfer_batch(batch_reqs);
+    SANDWICH_TEST_CHECK(batch_results.size() == 2);
+    SANDWICH_TEST_CHECK(batch_results[0].success && batch_results[0].bytes_transferred == 4096);
+    SANDWICH_TEST_CHECK(batch_results[1].success && batch_results[1].bytes_transferred == 4096);
+
+    // Cleanup temp file
+    close(tmp_fd);
+    unlink(tmp_path);
+
+    // 5. Test metrics & diagnostics
+    GDSStatus st_after = gds.get_status();
+    SANDWICH_TEST_CHECK(st_after.total_transfers == 4); // req_a + req_b + 2 batch
+    SANDWICH_TEST_CHECK(st_after.total_bytes == (4096 + 1024 + 4096 + 4096));
+    printf("  Diagnostics after transfers: %s\n", st_after.diagnostics.c_str());
+
+    gds.reset_metrics();
+    SANDWICH_TEST_CHECK(gds.get_status().total_transfers == 0);
+    SANDWICH_TEST_CHECK(gds.get_status().total_bytes == 0);
+
+    // 6. Test Error Handling
+    GDSTransferRequest req_err;
+    req_err.fd = -1;
+    req_err.dest_ptr = read_buf_a.data();
+    req_err.length = 4096;
+    GDSTransferResult res_err = gds.transfer(req_err);
+    SANDWICH_TEST_CHECK(!res_err.success);
+
+    printf("  [PASS] test_gpudirect_storage\n");
+}
+
 int main() {
     printf("=== Running sandwich.cpp Dispatch Subsystem Unit Tests ===\n");
     test_ram_estimator();
@@ -383,6 +506,7 @@ int main() {
     test_h2o_cache_compressor();
     test_paged_block_allocator();
     test_flash_decoding_scheduler();
+    test_gpudirect_storage();
     printf("=== All Sandwich Dispatch Tests Passed Successfully! ===\n");
     return 0;
 }

@@ -5082,6 +5082,31 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.flash_decoding = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--gds", "--gpudirect-storage"},
+        "enable GPUDirect Storage (cuFile) direct NVMe to VRAM DMA engine with fallback",
+        [](common_params & params) {
+            params.gpudirect_storage = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--no-gds", "--no-gpudirect-storage"},
+        "disable GPUDirect Storage direct DMA engine",
+        [](common_params & params) {
+            params.gpudirect_storage = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--gds-batch-size"}, "N",
+        "GPUDirect Storage concurrent DMA transfer batch size (default: 16)",
+        [](common_params & params, int value) {
+            params.gds_batch_size = value;
+            params.gpudirect_storage = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

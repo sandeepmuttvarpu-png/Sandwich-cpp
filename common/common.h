@@ -693,6 +693,8 @@ struct common_params {
     int32_t     h2o_heavy_hitters          = 1024;  // Number of dynamic heavy hitter tokens to retain
     bool        flash_decoding             = true;  // [Technique #79] Sequence-Parallel Flash-Decoding across SMs
     int32_t     flash_decoding_chunk_size  = 256;   // Flash-Decoding sequence partition size (default: 256)
+    bool        gpudirect_storage          = true;  // [Technique #80] GPUDirect Storage (cuFile) direct NVMe-to-VRAM DMA engine with fallback
+    int32_t     gds_batch_size             = 16;    // GPUDirect Storage concurrent DMA transfer batch size (default: 16)
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 

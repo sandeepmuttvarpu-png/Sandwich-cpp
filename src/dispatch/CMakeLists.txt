@@ -10,6 +10,7 @@ add_library(${TARGET} STATIC
     h2o_cache_compressor.cpp
     paged_block_allocator.cpp
     flash_decoding_scheduler.cpp
+    gpudirect_storage.cpp
     tui_wizard.cpp
     router.cpp
 )
