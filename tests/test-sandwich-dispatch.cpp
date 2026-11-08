@@ -3,6 +3,7 @@
 #include "prefetch_scheduler.hpp"
 #include "ram_cache_layer.hpp"
 #include "h2o_cache_compressor.hpp"
+#include "paged_block_allocator.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -271,6 +272,63 @@ static void test_h2o_cache_compressor() {
     printf("  [PASS] test_h2o_cache_compressor\n");
 }
 
+static void test_paged_block_allocator() {
+    printf("[test_paged_block_allocator] Starting...\n");
+
+    PagedBlockConfig cfg;
+    cfg.tokens_per_block = 16;
+    cfg.total_blocks = 128; // 128 * 16 = 2048 tokens capacity
+
+    PagedBlockAllocator alloc(cfg);
+
+    // 1. Create Sequence and append tokens
+    int32_t seq1 = alloc.create_sequence();
+    SANDWICH_TEST_CHECK(seq1 > 0);
+
+    // Append 40 tokens -> requires ceil(40/16) = 3 physical blocks
+    bool ok1 = alloc.append_tokens(seq1, 40);
+    SANDWICH_TEST_CHECK(ok1);
+    SANDWICH_TEST_CHECK(alloc.get_sequence_tokens(seq1) == 40);
+
+    std::vector<int32_t> tbl1 = alloc.get_block_table(seq1);
+    SANDWICH_TEST_CHECK(tbl1.size() == 3);
+
+    PagedBlockStats st1 = alloc.get_stats();
+    SANDWICH_TEST_CHECK(st1.allocated_blocks == 3);
+    SANDWICH_TEST_CHECK(st1.shared_blocks == 0);
+
+    // 2. Fork Sequence (Copy-on-Write for Speculative Trees / Chat Prefix)
+    int32_t seq2 = alloc.fork_sequence(seq1);
+    SANDWICH_TEST_CHECK(seq2 > seq1);
+    SANDWICH_TEST_CHECK(alloc.get_sequence_tokens(seq2) == 40);
+
+    std::vector<int32_t> tbl2 = alloc.get_block_table(seq2);
+    SANDWICH_TEST_CHECK(tbl2 == tbl1); // Shares identical physical blocks!
+
+    PagedBlockStats st2 = alloc.get_stats();
+    SANDWICH_TEST_CHECK(st2.allocated_blocks == 3); // Zero new blocks allocated!
+    SANDWICH_TEST_CHECK(st2.shared_blocks == 3);    // All 3 blocks shared via refcount!
+
+    // 3. Append to forked sequence (CoW test)
+    bool ok2 = alloc.append_tokens(seq2, 10);
+    SANDWICH_TEST_CHECK(ok2);
+    SANDWICH_TEST_CHECK(alloc.get_sequence_tokens(seq2) == 50);
+
+    // 4. Free sequence 1
+    alloc.free_sequence(seq1);
+    PagedBlockStats st3 = alloc.get_stats();
+    SANDWICH_TEST_CHECK(st3.active_sequences == 1);
+
+    // 5. Free sequence 2 -> all blocks returned to free list
+    alloc.free_sequence(seq2);
+    PagedBlockStats st4 = alloc.get_stats();
+    SANDWICH_TEST_CHECK(st4.allocated_blocks == 0);
+    SANDWICH_TEST_CHECK(st4.free_blocks == cfg.total_blocks);
+    printf("  PagedAttention Stats: %s\n", st2.diagnostics.c_str());
+
+    printf("  [PASS] test_paged_block_allocator\n");
+}
+
 int main() {
     printf("=== Running sandwich.cpp Dispatch Subsystem Unit Tests ===\n");
     test_ram_estimator();
@@ -278,6 +336,7 @@ int main() {
     test_prefetch_scheduler();
     test_ram_cache_layer();
     test_h2o_cache_compressor();
+    test_paged_block_allocator();
     printf("=== All Sandwich Dispatch Tests Passed Successfully! ===\n");
     return 0;
 }

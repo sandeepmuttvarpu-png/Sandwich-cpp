@@ -8,6 +8,7 @@ add_library(${TARGET} STATIC
     prefetch_scheduler.cpp
     ram_cache_layer.cpp
     h2o_cache_compressor.cpp
+    paged_block_allocator.cpp
     tui_wizard.cpp
     router.cpp
 )
