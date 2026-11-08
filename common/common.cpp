@@ -2412,6 +2412,10 @@ void sandwich_auto_dispatch(common_params & params) {
     if (params.chunked_prefill) {
         LOG_INF("   -> [Technique #76] Chunked Prefill Dynamic Scheduling ACTIVE (chunk_size=%d, prevents MoE DDR5 bus thrashing)\n", params.n_ubatch);
     }
+    if (params.h2o_compression) {
+        LOG_INF("   -> [Technique #77] Heavy Hitter Oracle (H2O) ACTIVE (budget=%d, heavy_hitters=%d, sinks=%d)\n",
+                params.h2o_budget, params.h2o_heavy_hitters, params.n_sink_tokens);
+    }
 
     params.sandwich_dispatched = true;
     LOG_INF("=======================================================\n\n");

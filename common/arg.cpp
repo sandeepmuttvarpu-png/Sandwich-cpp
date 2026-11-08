@@ -5031,6 +5031,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_ubatch = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PREFILL_CHUNK_SIZE"));
+
+    add_opt(common_arg(
+        {"--h2o"},
+        "enable Heavy Hitter Oracle (H2O) dynamic KV cache eviction",
+        [](common_params & params) {
+            params.h2o_compression = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--h2o-budget"}, "N",
+        "maximum total KV cache tokens under H2O compression (default: 2048)",
+        [](common_params & params, int value) {
+            params.h2o_budget = value;
+            params.h2o_compression = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--h2o-heavy-hitters"}, "N",
+        "number of dynamic heavy hitter tokens to retain in H2O pool (default: 1024)",
+        [](common_params & params, int value) {
+            params.h2o_heavy_hitters = value;
+            params.h2o_compression = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",

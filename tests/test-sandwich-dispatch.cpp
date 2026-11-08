@@ -2,12 +2,14 @@
 #include "memory_watermark.hpp"
 #include "prefetch_scheduler.hpp"
 #include "ram_cache_layer.hpp"
+#include "h2o_cache_compressor.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
 #include <string>
 #include <cmath>
+#include <algorithm>
 
 #define SANDWICH_TEST_CHECK(cond) \
     do { \
@@ -213,12 +215,69 @@ static void test_ram_cache_layer() {
     printf("  [PASS] test_ram_cache_layer\n");
 }
 
+static void test_h2o_cache_compressor() {
+    printf("[test_h2o_cache_compressor] Starting...\n");
+
+    H2OConfig cfg;
+    cfg.enabled = true;
+    cfg.sink_tokens = 4;
+    cfg.heavy_hitters = 16;
+    cfg.rolling_window = 16;
+    cfg.max_budget = 36; // 4 sinks + 16 heavy + 16 window
+
+    H2OCacheCompressor h2o(cfg);
+
+    // Context length = 20 (below budget of 36) -> no eviction
+    SANDWICH_TEST_CHECK(!h2o.needs_eviction(20));
+    std::vector<int32_t> ev1 = h2o.compute_eviction_indices(20);
+    SANDWICH_TEST_CHECK(ev1.empty());
+
+    // Generate simulated attention distribution over 100 tokens
+    size_t ctx_len = 100;
+    std::vector<float> attn(ctx_len, 0.01f);
+    // Spike attention on specific key tokens (e.g. tokens 10, 25, 42)
+    attn[10] = 5.0f;
+    attn[25] = 8.0f;
+    attn[42] = 12.0f;
+
+    h2o.accumulate_attention(attn);
+
+    SANDWICH_TEST_CHECK(h2o.needs_eviction(ctx_len));
+    std::vector<int32_t> ev_indices = h2o.compute_eviction_indices(ctx_len);
+    SANDWICH_TEST_CHECK(!ev_indices.empty());
+
+    // Total tokens minus evictions must be <= max_budget
+    size_t retained_count = ctx_len - ev_indices.size();
+    SANDWICH_TEST_CHECK(retained_count <= cfg.max_budget);
+
+    // Verify Sinks (0..3) are NEVER evicted
+    for (int32_t idx : ev_indices) {
+        SANDWICH_TEST_CHECK(idx >= 4);
+        SANDWICH_TEST_CHECK(idx < static_cast<int32_t>(ctx_len - cfg.rolling_window));
+    }
+
+    // Verify top Heavy Hitters (10, 25, 42) are retained
+    std::vector<int32_t> retained = h2o.get_retained_indices(ctx_len);
+    SANDWICH_TEST_CHECK(std::find(retained.begin(), retained.end(), 10) != retained.end());
+    SANDWICH_TEST_CHECK(std::find(retained.begin(), retained.end(), 25) != retained.end());
+    SANDWICH_TEST_CHECK(std::find(retained.begin(), retained.end(), 42) != retained.end());
+
+    H2OTelemetry telem = h2o.get_telemetry();
+    SANDWICH_TEST_CHECK(telem.total_evictions > 0);
+    SANDWICH_TEST_CHECK(telem.compression_ratio > 1.0);
+    printf("  H2O Telemetry: %s, compression ratio: %.2fx\n",
+           telem.status_desc.c_str(), telem.compression_ratio);
+
+    printf("  [PASS] test_h2o_cache_compressor\n");
+}
+
 int main() {
     printf("=== Running sandwich.cpp Dispatch Subsystem Unit Tests ===\n");
     test_ram_estimator();
     test_memory_watermarker();
     test_prefetch_scheduler();
     test_ram_cache_layer();
+    test_h2o_cache_compressor();
     printf("=== All Sandwich Dispatch Tests Passed Successfully! ===\n");
     return 0;
 }

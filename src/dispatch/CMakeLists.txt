@@ -7,6 +7,7 @@ add_library(${TARGET} STATIC
     memory_watermark.cpp
     prefetch_scheduler.cpp
     ram_cache_layer.cpp
+    h2o_cache_compressor.cpp
     tui_wizard.cpp
     router.cpp
 )

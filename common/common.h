@@ -688,6 +688,9 @@ struct common_params {
     bool        asym_prefetch              = true;  // [Technique #74] Asymmetric Parallel Prefetch (pinned DMA for shared weights + lookahead)
     int32_t     ram_cache_mb               = 2048;  // [Technique #75] Dedicated Host RAM L2 Caching Layer budget in MiB (2MB THP)
     int32_t     prefill_chunk_size         = 128;   // [Technique #76] Chunked Prefill Dynamic Scheduling (64-128 for MoE, 256-512 for dense)
+    bool        h2o_compression            = false; // [Technique #67] Heavy Hitter Oracle (H2O) dynamic KV cache eviction
+    int32_t     h2o_budget                 = 2048;  // Total active KV cache budget (sink + heavy + window)
+    int32_t     h2o_heavy_hitters          = 1024;  // Number of dynamic heavy hitter tokens to retain
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
