@@ -350,6 +350,14 @@ static void test_flash_decoding_scheduler() {
     SANDWICH_TEST_CHECK(p_long.theoretical_speedup > 20.0);
     printf("  Flash-Decoding 64k: %s\n", p_long.diagnostics.c_str());
 
+    // Case 2b: Moderate context (2,048 tokens on 32-SM RTX 5050 Mobile) -> Adaptive chunking
+    FlashDecodingPlan p_mod = FlashDecodingScheduler::calculate_plan(2048, 32, 1024, 256);
+    SANDWICH_TEST_CHECK(p_mod.enabled);
+    SANDWICH_TEST_CHECK(p_mod.chunk_size == 64); // Scaled from 256 down to 64
+    SANDWICH_TEST_CHECK(p_mod.active_sms_utilized == 32); // All 32 SMs saturated even at 2k context!
+    SANDWICH_TEST_CHECK(p_mod.theoretical_speedup > 20.0);
+    printf("  Flash-Decoding 2k Adaptive: %s\n", p_mod.diagnostics.c_str());
+
     // Case 3: Logarithmic reduction merge of partial reductions
     size_t head_dim = 128;
     std::vector<PartialAttentionReduction> partials;

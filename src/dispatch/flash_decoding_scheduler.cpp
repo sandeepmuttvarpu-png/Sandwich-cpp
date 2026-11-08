@@ -29,6 +29,12 @@ FlashDecodingPlan FlashDecodingScheduler::calculate_plan(
     }
 
     plan.enabled = true;
+    // For moderate contexts below target_sms * chunk_size, adaptively scale down chunk size
+    // to saturate all available SMs (e.g. on 32-SM RTX 5050 Mobile, scale to 64 or 128)
+    if (chunk_size == 256 && kv_length < (static_cast<size_t>(plan.target_sms) * 256)) {
+        size_t target_chunk = kv_length / plan.target_sms;
+        plan.chunk_size = std::clamp(target_chunk, static_cast<size_t>(64), static_cast<size_t>(256));
+    }
     plan.num_splits = (kv_length + plan.chunk_size - 1) / plan.chunk_size;
     plan.active_sms_utilized = std::min(static_cast<int>(plan.num_splits), plan.target_sms);
 
