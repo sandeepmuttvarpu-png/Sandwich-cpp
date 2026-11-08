@@ -2327,10 +2327,16 @@ void sandwich_auto_dispatch(common_params & params) {
         LOG_INF("   -> [Technique #44] Asymmetric KV Outlier Channelling ACTIVE (K: turbo4 PolarQuant, V: turbo2 LogScale, 2.75 bits/tok)\n");
     }
 
-    if (params.chunked_prefill || ctx_eval >= 32768) {
+    if (params.chunked_prefill || ctx_eval >= 32768 || is_moe) {
         params.chunked_prefill = true;
         if (params.prefill_chunk_size > 0) {
             params.n_ubatch = params.prefill_chunk_size;
+        } else if (is_moe) {
+            // In fine-grained MoE architectures (e.g. Qwen Flash Next 125B with 512 experts),
+            // large ubatches activate nearly all experts at once, triggering an SSD/DDR5 thrashing storm.
+            // Micro-chunking (64 to 128) concentrates token activations on a compact active expert subset.
+            params.n_ubatch = (expert_count >= 256) ? 64 : 128;
+            params.prefill_chunk_size = params.n_ubatch;
         } else if (params.n_ubatch > 512 || params.n_ubatch == 0) {
             params.n_ubatch = 512;
         }
@@ -2403,7 +2409,9 @@ void sandwich_auto_dispatch(common_params & params) {
     if (params.dynamic_watermark) {
         LOG_INF("   -> [Technique #73] Dynamic Memory Watermarking System ACTIVE (--dynamic-watermark, live HWM 85%% / LWM 70%% tracking)\n");
     }
-    if (params.asym_prefetch) {
+    if (params.asym_prefetch || (is_moe && expert_count >= 256)) {
+        params.asym_prefetch = true;
+        setenv("SANDWICH_ASYM_PREFETCH", "1", 1);
         LOG_INF("   -> [Technique #74] Asymmetric Parallel Prefetch ACTIVE (--asym-prefetch, pinned DMA shared weights + async MoE lookahead)\n");
     }
     if (params.ram_cache_mb > 0) {

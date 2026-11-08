@@ -45,6 +45,7 @@ echo ">> Tier 1 VRAM  : ${VRAM_HOT_DESC} (Strict 7,100 MB Wayland Guard)"
 echo ">> Tier 2 RAM   : ${WARM_RAM_MB} MiB (20 GiB) WARM DDR5 Pool Squeezed (Zero Disk Trimming)"
 echo ">> Tier 3 SSD   : COLD Long-Tail Experts Streamed on Demand via io_uring DMA (depth 128)"
 echo ">> KV Cache     : Turbo-KVarN Unified 4-Bit (turbo4 + closed-form unit-variance)"
+echo ">> Chunk Prefill: Technique #76 Micro-Chunked Prefill (-ub 64, prevents MoE expert thrashing)"
 echo ">> Strata Assim.: Batched PCIe DMA, pointer rotation, disjoint guard, 2Q Ghost Cache"
 echo "======================================================================"
 
@@ -52,6 +53,10 @@ exec "${CLI_BIN}" \
     -m "${MODEL_SHARD1}" \
     ${DRAFT_ARG} \
     --sandwich-auto \
+    --chunked-prefill \
+    --prefill-chunk-size 64 \
+    -ub 64 \
+    --asym-prefetch \
     --sched-async-cpu \
     --dma-batch \
     --moe-exchange-rot \
