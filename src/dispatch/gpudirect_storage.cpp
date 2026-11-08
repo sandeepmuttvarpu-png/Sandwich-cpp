@@ -10,6 +10,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#if __has_include(<cuda_runtime.h>)
+    #include <cuda_runtime.h>
+    #define SANDWICH_CUDA_AVAILABLE 1
+#endif
+
 namespace sandwich {
 namespace dispatch {
 
@@ -210,8 +215,8 @@ GDSTransferResult GDSManager::execute_posix_direct(const GDSTransferRequest & re
     align_bounds(req.file_offset, req.length, config_.block_alignment,
                  aligned_offset, aligned_length, offset_padding);
 
-    // If request is already aligned and destination is properly sized
-    if (offset_padding == 0 && (req.length % config_.block_alignment == 0)) {
+    // If request is already aligned and destination is properly sized AND destination is host RAM
+    if (!req.is_gpu_vram && offset_padding == 0 && (req.length % config_.block_alignment == 0)) {
         ssize_t bytes_read = pread(req.fd, req.dest_ptr, req.length, req.file_offset);
         if (bytes_read < 0) {
             res.success = false;
@@ -239,7 +244,25 @@ GDSTransferResult GDSManager::execute_posix_direct(const GDSTransferRequest & re
 
         if (static_cast<size_t>(bytes_read) > offset_padding) {
             size_t copy_size = std::min(req.length, static_cast<size_t>(bytes_read) - offset_padding);
-            std::memcpy(req.dest_ptr, static_cast<const uint8_t *>(aligned_buf) + offset_padding, copy_size);
+            const uint8_t * src_ptr = static_cast<const uint8_t *>(aligned_buf) + offset_padding;
+            if (req.is_gpu_vram) {
+#if defined(SANDWICH_CUDA_AVAILABLE)
+                cudaError_t err = cudaMemcpy(req.dest_ptr, src_ptr, copy_size, cudaMemcpyHostToDevice);
+                if (err != cudaSuccess) {
+                    free(aligned_buf);
+                    res.success = false;
+                    res.error_message = std::string("cudaMemcpy failed: ") + cudaGetErrorString(err);
+                    return res;
+                }
+#else
+                free(aligned_buf);
+                res.success = false;
+                res.error_message = "GPU VRAM destination specified but CUDA runtime unavailable in fallback";
+                return res;
+#endif
+            } else {
+                std::memcpy(req.dest_ptr, src_ptr, copy_size);
+            }
             res.bytes_transferred = copy_size;
         } else {
             res.bytes_transferred = 0;
