@@ -24,7 +24,7 @@ struct expert_locator {
     size_t         bytes       = 0;       // size in bytes
 };
 
-// keeps the most recently used experts of host-resident MoE layers in a device buffer
+// keeps recently and repeatedly used experts of host-resident MoE layers in a device buffer
 // each layer has a slot map in host memory: when the scheduler copies it to the device, the copy callback uploads the missing experts
 class llama_moe_cache {
 public:
@@ -42,6 +42,7 @@ public:
                     bool   disjoint_guard = true,
                     bool   exchange_rot = true,
                     int32_t io_uring_qd = 128);
+    llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share);
     ~llama_moe_cache();
 
     // the device that caches layer il

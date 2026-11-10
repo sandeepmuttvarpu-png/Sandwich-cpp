@@ -2,6 +2,7 @@
 #include "llama-moe-cache-share.h"
 
 #include "llama-impl.h"
+#include "llama-memory.h"
 #include "llama-model.h"
 
 #include "ggml-cpp.h"
@@ -9,6 +10,9 @@
 #include "ggml-iqk.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
@@ -22,8 +26,8 @@
 #include <liburing.h>
 #endif
 
-// Phase 6: Zero enum collisions verification between TurboQuant types (43-45) and IQK types (134+)
-static_assert(GGML_TYPE_TURBO4_0 == 45, "TurboQuant type enum mismatch");
+// Phase 6: Zero enum collisions verification between TurboQuant types (44-46) and IQK types (134+)
+static_assert(GGML_TYPE_TURBO4_0 == 46, "TurboQuant type enum mismatch");
 static_assert(GGML_TYPE_IQ2_KS_EXT >= 134, "IQK type collision guard failed");
 
 namespace {
@@ -133,7 +137,7 @@ struct llama_moe_cache::impl {
     struct layer {
         int32_t ig = -1;                    // -1 if the layer is not cached
         ggml_tensor * slot_map = nullptr;   // I32 [1, n_expert] in host memory
-        ggml_tensor * slot_map_cpu = nullptr;// looked up in place of slot_map by graphs with a CPU part
+        ggml_tensor * slot_map_cpu = nullptr; // looked up in place of slot_map by the graphs with a CPU part, if cpu_share > 0, its data is not used
         ggml_tensor * cpu_map  = nullptr;   // I32 [1, n_expert] in host memory, if cpu_share > 0
         std::vector<int32_t> cpu_experts;   // experts set in cpu_map
         uint32_t cpu_acc = 0;               // fraction of a miss carried over to the next plan, in 1/65536
@@ -149,7 +153,7 @@ struct llama_moe_cache::impl {
     struct stats {
         size_t hits   = 0;
         size_t misses = 0;
-        size_t cpu    = 0;
+        size_t cpu    = 0; // misses computed on the CPU
         size_t bytes  = 0;
     };
 
@@ -166,7 +170,7 @@ struct llama_moe_cache::impl {
     std::vector<group> groups;
     std::vector<layer> layers;
     std::unordered_map<const ggml_tensor *, binding> bindings; // host experts -> cached experts
-    std::unordered_map<const ggml_tensor *, std::pair<int32_t, bool>> layer_of; // slot map -> { layer, has_cpu }
+    std::unordered_map<const ggml_tensor *, std::pair<int32_t, bool>> layer_of; // slot map -> layer, and if the graph that looks it up has a CPU part
 
     std::vector<int32_t> ids;
     std::vector<moe_cache_lru::fill> fills;
@@ -514,7 +518,7 @@ struct llama_moe_cache::impl {
         }
 
         void prepopulate_warm_pool(const llama_model & model, const std::vector<layer> & layers, const std::vector<group> & groups) {
-            if (model.hparams.no_alloc) return;
+            if (model.no_alloc()) return;
             const char * env_prepop = std::getenv("SANDWICH_MOE_PREPOPULATE");
             if (env_prepop && std::strcmp(env_prepop, "0") == 0) {
                 LLAMA_LOG_INFO("%s: Tier 2 WARM DDR5 pool pre-population skipped via env\n", __func__);
@@ -599,6 +603,7 @@ struct llama_moe_cache::impl {
                 (t1_us - t0_us) * 1e-6);
         }
     } tier_engine;
+    FILE * trace = nullptr;
 
     // slot maps in host memory
     ggml_context_ptr ctx_host;
@@ -614,8 +619,9 @@ struct llama_moe_cache::impl {
 
     impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share, size_t warm_ram_bytes, bool moe_3tier, bool moe_2q, bool dma_batch = true, bool disjoint_guard = true, bool exchange_rot = true, int32_t io_uring_qd = 128) :
             model(&model), n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()),
-            cpu_share(cpu_share), cpu_share_q((uint32_t) (cpu_share * 65536.0f)),
+            cpu_share(std::clamp(cpu_share, 0.0f, 1.0f)), cpu_share_q((uint32_t) (std::clamp(cpu_share, 0.0f, 1.0f) * 65536.0f)),
             dma_batch(dma_batch), disjoint_guard(disjoint_guard), exchange_rot(exchange_rot) {
+        const bool no_alloc = model.no_alloc();
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -734,6 +740,14 @@ struct llama_moe_cache::impl {
         }
 
         // within a device the budget is split by the size of the experts, so each group caches the same fraction of its experts
+        cpu_share_q = (uint32_t) std::lround(cpu_share*65536.0f);
+        if (const char * path = getenv("LLAMA_MOE_CACHE_TRACE"); path != nullptr && *path != '\0') {
+            trace = fopen(path, "wb");
+            if (trace == nullptr) {
+                throw std::runtime_error(std::string("failed to open the MoE cache trace ") + path);
+            }
+            write_trace_header(split_sum);
+        }
         std::vector<size_t> n_tensors(devices.size(), 0);
         size_t n_tensors_host = 0;
         for (group & g : groups) {
@@ -774,7 +788,7 @@ struct llama_moe_cache::impl {
                 return (tier_engine.locators[il][expert].ram_ptr != nullptr && tier_engine.locators[il][expert].warm_slot >= 0);
             };
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
-            n_tensors_host  += g.layers.size() * (n_zero > 0 ? 3 : 1);
+            n_tensors_host  += g.layers.size()*(n_zero > 0 ? 3 : 1); // slot maps and CPU map
         }
         if (n_tensors_host == 0) {
             throw std::runtime_error("MoE cache is too small to hold the experts of one token");
@@ -842,44 +856,28 @@ struct llama_moe_cache::impl {
             devices[g.id].buf_size += alloc_size(g, g.n_slots);
         }
 
-        if (model.hparams.no_alloc) {
-            // only used to measure the memory use, see llama_context::memory_breakdown
-            for (device & d : devices) {
-                if (!d.ctx) {
-                    continue;
-                }
-                d.buf.reset(ggml_backend_buft_alloc_buffer(d.buft, 0));
-                for (ggml_tensor * t = ggml_get_first_tensor(d.ctx.get()); t != nullptr; t = ggml_get_next_tensor(d.ctx.get(), t)) {
-                    t->buffer = d.buf.get();
-                }
+        // with no_alloc, dummy buffers are attached so the memory use can still be measured, see llama_context::memory_breakdown
+        for (device & d : devices) {
+            if (!d.ctx) {
+                continue;
             }
-            buf_host.reset(ggml_backend_buft_alloc_buffer(buft_host, 0));
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx_host.get()); t != nullptr; t = ggml_get_next_tensor(ctx_host.get(), t)) {
-                t->buffer = buf_host.get();
-            }
-        } else {
-            for (device & d : devices) {
-                if (!d.ctx) {
-                    continue;
-                }
-                d.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(d.ctx.get(), d.buft));
-                if (!d.buf) {
-                    throw std::runtime_error("failed to allocate the MoE cache buffers");
-                }
+            d.buf = llama_memory_bufs::alloc_buf(d.ctx.get(), d.buft, no_alloc, "MoE cache");
+            if (!no_alloc) {
                 ggml_backend_buffer_clear(d.buf.get(), 0);
                 d.buf_size = ggml_backend_buffer_get_size(d.buf.get());
             }
-            buf_host.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_host.get(), buft_host));
-            if (!buf_host) {
-                throw std::runtime_error("failed to allocate the MoE cache buffers");
-            }
-            ggml_backend_buffer_clear(buf_host.get(), 0xff); // all slots are -1
+        }
+        buf_host = llama_memory_bufs::alloc_buf(ctx_host.get(), buft_host, no_alloc, "MoE cache slot maps");
+        if (!no_alloc) {
+            ggml_backend_buffer_clear(buf_host.get(), 0xff); // the CPU maps are -1
             buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
 
             for (group & g : groups) {
                 for (int32_t il : g.layers) {
                     if (layers[il].slot_map != nullptr) {
-                        g.lru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+                        int32_t * slots = (int32_t *) layers[il].slot_map->data;
+                        std::fill(slots, slots + layers[il].slot_map->ne[1], g.lru.empty);
+                        g.lru.slot_map[il] = slots;
                     }
                     if (layers[il].cpu_map != nullptr && layers[il].cpu_map->data != nullptr) {
                         std::memset(layers[il].cpu_map->data, -1, ggml_nbytes(layers[il].cpu_map));
@@ -901,18 +899,19 @@ struct llama_moe_cache::impl {
             if (d.host_bytes == 0) {
                 continue;
             }
-            LLAMA_LOG_INFO("%s: %10s MoE cache size = %8.2f MiB for %.2f MiB of host experts\n", __func__,
-                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0);
+            LLAMA_LOG_INFO("%s: %10s MoE cache size = %8.2f MiB for %.2f MiB of host experts, %.0f%% of the misses on the CPU\n", __func__,
+                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, 100.0*cpu_share);
             for (const group & g : groups) {
                 if (g.id == (int32_t) id) {
-                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%)\n", __func__,
-                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
+                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%, %.1f tokens worth)\n", __func__,
+                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]),
+                        (double) g.n_slots/(g.layers.size()*n_expert_used));
                 }
             }
         }
 
         // Initialize Phase 12: 3-Tier Hierarchical MoE Memory System
-        if (moe_3tier && !groups.empty() && !model.hparams.no_alloc) {
+        if (moe_3tier && !groups.empty() && !model.no_alloc()) {
             size_t expert_bytes = 0;
             for (const ggml_tensor * t : groups[0].ref) {
                 expert_bytes += t->nb[2];
@@ -1005,6 +1004,44 @@ struct llama_moe_cache::impl {
         return devices[groups[layers[il].ig].id].backend;
     }
 
+    // trace format, little endian: "MCT1", then u32 n_layer, n_expert_used, n_group
+    // per group: u32 device, n_expert, n_layers, the layers (u32), f64 split, split_sum, u64 group host bytes, device host bytes, alignment,
+    //            u32 n_tensors, the bytes of one expert of each tensor (u64)
+    // then one record per slot lookup: i32 layer, experts per token, n_ids, the ids (i32)
+    void write_trace_header(double split_sum) {
+        auto u32 = [&](uint32_t v) { fwrite(&v, sizeof(v), 1, trace); };
+        auto u64 = [&](uint64_t v) { fwrite(&v, sizeof(v), 1, trace); };
+        auto f64 = [&](double   v) { fwrite(&v, sizeof(v), 1, trace); };
+        fwrite("MCT1", 1, 4, trace);
+        u32(layers.size());
+        u32(n_expert_used);
+        u32(groups.size());
+        for (const group & g : groups) {
+            const device & d = devices[g.id];
+            u32(g.id);
+            u32(g.ref[0]->ne[2]);
+            u32(g.layers.size());
+            for (int32_t il : g.layers) {
+                u32(il);
+            }
+            f64(d.split);
+            f64(split_sum);
+            u64(g.host_bytes);
+            u64(d.host_bytes);
+            u64(ggml_backend_buft_get_alignment(d.buft));
+            u32(g.ref.size());
+            for (const ggml_tensor * t : g.ref) {
+                u64(t->nb[2]);
+            }
+        }
+    }
+
+    void write_trace(int32_t il, int32_t n_used) {
+        const int32_t rec[3] = { il, n_used, (int32_t) ids.size() };
+        fwrite(rec, sizeof(int32_t), 3, trace);
+        fwrite(ids.data(), sizeof(int32_t), ids.size(), trace);
+    }
+
     ~impl() {
         log_stats();
 #ifdef GGML_USE_IO_URING
@@ -1017,8 +1054,10 @@ struct llama_moe_cache::impl {
             free(tier_engine.pool_mem);
             tier_engine.pool_mem = nullptr;
         }
+        if (trace != nullptr) {
+            fclose(trace);
+        }
     }
-
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used, bool cpu_part) const {
         if (il < 0 || il >= (int32_t) layers.size() || layers[il].ig < 0) {
             return nullptr;
@@ -1041,7 +1080,20 @@ struct llama_moe_cache::impl {
         if (l.ig < 0 || n_tokens == 0 || n_tokens > max_batch || cpu_share == 0.0f) {
             return nullptr;
         }
-        return l.cpu_map;
+        // the scheduler would run the CPU part on a device that offloads such batches from host weights
+        ggml_tensor probe = {};
+        probe.op    = GGML_OP_MUL_MAT_ID;
+        probe.type  = GGML_TYPE_F32;
+        probe.ne[0] = 1;
+        probe.ne[1] = n_expert_used;
+        probe.ne[2] = n_tokens;
+        probe.ne[3] = 1;
+        for (const device & d : devices) {
+            if (ggml_backend_offload_op(d.backend, &probe)) {
+                return nullptr;
+            }
+        }
+        return layers[il].cpu_map;
     }
 
     ggml_tensor * get_experts(const ggml_tensor * w) const {
@@ -1062,11 +1114,11 @@ struct llama_moe_cache::impl {
 
         // large batches only read the cache, so the experts used in generation stay in it
         const int32_t * slots = g.lru.slot_map[b.il];
-        if (slots == nullptr || slots[e] < 0) {
+        if (slots == nullptr || slots[e] >= g.n_slots) {
             return 0;
         }
         int64_t n = 1;
-        while (e + n <= last && slots[e + n] == slots[e] + n) {
+        while (e + n <= last && slots[e + n] < g.n_slots && slots[e + n] == slots[e] + n) {
             n++;
         }
 
@@ -1126,6 +1178,10 @@ struct llama_moe_cache::impl {
         ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
         ggml_backend_synchronize(backend);
 
+        if (trace != nullptr) {
+            write_trace(il, n_used);
+        }
+
         // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
         const uint32_t share_q = (has_cpu && g.lru.is_full()) ? cpu_share_q : 0;
         auto n_cpu = [&](size_t n_miss) {
@@ -1153,7 +1209,6 @@ struct llama_moe_cache::impl {
                 l.cpu_experts.push_back(f.expert);
             }
         }
-
         // upload the missing experts
         size_t bytes = 0;
         if (tier_engine.enabled) {
@@ -1326,6 +1381,10 @@ llama_moe_cache::llama_moe_cache(const llama_model & model,
     pimpl(new impl(model, backends, bufts, size, cpu_share, warm_ram_bytes, moe_3tier, moe_2q, dma_batch, disjoint_guard, exchange_rot, io_uring_qd)) {
 }
 
+llama_moe_cache::llama_moe_cache(const llama_model & model, bool /*no_alloc*/, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
+    pimpl(new impl(model, backends, bufts, size, cpu_share, /*warm_ram_bytes=*/0, /*moe_3tier=*/false, /*moe_2q=*/true)) {
+}
+
 llama_moe_cache::~llama_moe_cache() = default;
 
 ggml_backend_t llama_moe_cache::backend(int32_t il) const {
@@ -1336,12 +1395,12 @@ ggml_tensor * llama_moe_cache::get_slot_map(int32_t il, int64_t n_tokens, int64_
     return pimpl->get_slot_map(il, n_tokens, n_expert_used, cpu_part);
 }
 
-ggml_tensor * llama_moe_cache::get_cpu_map(int32_t il, int64_t n_tokens) const {
-    return pimpl->get_cpu_map(il, n_tokens);
-}
-
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
     return pimpl->get_experts(w);
+}
+
+ggml_tensor * llama_moe_cache::get_cpu_map(int32_t il, int64_t n_tokens) const {
+    return pimpl->get_cpu_map(il, n_tokens);
 }
 
 bool llama_moe_cache::copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {

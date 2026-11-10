@@ -141,6 +141,7 @@ struct moe_cache_lru {
 
     std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
     std::vector<slot_key>  key_of;   // [n_slots] layer and expert key, {-1, -1} if empty
+    int32_t empty = 0;               // slot of the experts that are not cached (PR #30966)
 
     // doubly linked list of the slots
     std::vector<int32_t> prev;
@@ -299,6 +300,7 @@ struct moe_cache_lru {
     void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, bool use_2q = true) {
         this->n_expert = n_expert;
         this->n_slots  = n_slots;
+        this->empty    = n_slots;
         this->use_2q   = use_2q;
 
         slot_map.assign(n_layer, nullptr);
