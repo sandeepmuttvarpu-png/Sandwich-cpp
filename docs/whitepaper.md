@@ -500,6 +500,25 @@ To facilitate artifact evaluation and independent reproduction, Project Sandwich
     --ctx-size 131072
 ```
 
+### G. Era 15 & 16: Dispatch Engine, Flash-Decoding & GPUDirect Storage (Techniques #73–#80)
+```bash
+./bin/sandwich-cli \
+    --model models/Qwen-Flash-Next-125B.gguf \
+    --sandwich-auto \
+    --dynamic-watermark \
+    --asym-prefetch \
+    --ram-cache 2048 \
+    --prefill-chunk-size 128 \
+    --h2o \
+    --h2o-budget 2048 \
+    --h2o-heavy-hitters 1024 \
+    --flash-decoding \
+    --flash-decoding-chunk-size 256 \
+    --gds \
+    --gds-batch-size 16 \
+    --ctx-size 65536
+```
+
 # Citations
 
 [1] [Sandwich.cpp MoE Inference Engine](/systems/sandwich-cpp.md)  
