@@ -199,6 +199,26 @@ sandwich.cpp merges upstream llama.cpp parameters with custom MoE expert caching
  --peer-fallback                     │ None     │ [Technique #66] Dynamic Zero-Crash Failover: instantly hot-swaps peer layers to local 3-tier offload.        │             true
  --no-peer-fallback                  │ None     │ Disable peer failover (abort on peer disconnect).                                                             │             false
 ──────
+## 16. ⚡ Era 15 & 16: Dispatch Engine & Core Architectural Upgrades (Techniques #73 - #80)
+
+ Flag                                │ Argument │ Description                                                                                                   │            Default
+─────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────
+ --dynamic-watermark                 │ None     │ [Technique #73] Dynamic Memory Watermarking: live tracking with HWM 85% / LWM 70% tripwires to prevent OOM.   │             true
+ --no-dynamic-watermark              │ None     │ Disable dynamic memory watermarking.                                                                          │             false
+ --asym-prefetch                     │ None     │ [Technique #74] Asymmetric Parallel Prefetch: lookahead pinned DMA staging for shared weights & MoE experts. │             true
+ --no-asym-prefetch                  │ None     │ Disable asymmetric parallel prefetching.                                                                      │             false
+ --ram-cache                         │ MB       │ [Technique #75] Dedicated Host RAM L2 Caching Layer budget in MiB (2MB THP aligned).                           │             2048
+ --prefill-chunk-size                │ N        │ [Technique #76] Chunked Prefill Dynamic Scheduling (64-128 for MoE, 256-512 for dense).                      │             128
+ --h2o                               │ None     │ [Technique #67 KV] Heavy Hitter Oracle (H2O) dynamic KV cache eviction (preserves sinks & heavy hitters).    │             false
+ --h2o-budget                        │ N        │ Total active KV cache budget (sink + heavy hitters + window) in tokens.                                       │             2048
+ --h2o-heavy-hitters                 │ N        │ Number of dynamic heavy hitter tokens to retain.                                                              │             1024
+ --flash-decoding                    │ None     │ [Technique #79] Sequence-Parallel Flash-Decoding across GPU SMs (splits KV into 256-tok chunks for Q=1).     │             true
+ --no-flash-decoding                 │ None     │ Disable Sequence-Parallel Flash-Decoding.                                                                     │             false
+ --flash-decoding-chunk-size         │ N        │ Sequence-Parallel Flash-Decoding partition chunk size in tokens.                                              │             256
+ --gds, --gpudirect-storage          │ None     │ [Technique #80] GPUDirect Storage (cuFile) direct NVMe to VRAM DMA engine with fallback.                      │             true
+ --no-gds, --no-gpudirect-storage    │ None     │ Disable GPUDirect Storage direct DMA engine.                                                                  │             false
+ --gds-batch-size                    │ N        │ GPUDirect Storage concurrent DMA transfer batch size.                                                         │             16
+──────
 
 
 
