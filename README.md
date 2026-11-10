@@ -8,7 +8,7 @@
 [![VRAM: 8GB Friendly](https://img.shields.io/badge/VRAM-8GB%20Friendly%20%F0%9F%92%AA-brightgreen)](#)
 [![Context: 128k Verified](https://img.shields.io/badge/Context-128k%20Verified%20%F0%9F%A7%A0-blueviolet)](#)
 [![Speed: Unhinged](https://img.shields.io/badge/Speed-35%2B%20tok%2Fs%20MoE-red)](#)
-[![Techniques: 72 Active](https://img.shields.io/badge/Techniques-72%20Active%20%E2%9A%A1-orange)](#)
+[![Techniques: 80 Active](https://img.shields.io/badge/Techniques-80%20Active%20%E2%9A%A1-orange)](#)
 [![Whitepaper: v7.0](https://img.shields.io/badge/Whitepaper-v7.0%20(arXiv)-success)](docs/whitepaper.md)
 [![No Cap: Verified](https://img.shields.io/badge/Cap%3A-Zero%20%F0%9F%A7%A2-blue)](#)
 
@@ -26,7 +26,7 @@ And what happens?
 
 We said: **NAH, WE’D WIN.**
 
-We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **72 relentless hardware & algorithmic techniques**:
+We architected **Sandwich.cpp** as an independent, standalone high-performance inference engine built on top of the ggml foundation, ripping out PCIe serialization bubbles and fusing **80 relentless hardware & algorithmic techniques**:
 1. **Phase 12 3-Tier Hierarchical MoE Engine** (HOT VRAM $\to$ WARM DDR5 THP $\to$ COLD NVMe `io_uring` DMA).
 2. **2Q & Ghost-Cache Replacement Policy** (probation queues that obliterate one-hit wonder cache thrashing).
 3. **The 70% RAM Rule & Asymmetric Split-KV Engine** (eliminates 15ms PCIe ping-pong stalls on giant dense models).
@@ -35,6 +35,7 @@ We architected **Sandwich.cpp** as an independent, standalone high-performance i
 6. **Radix-Tree Persistent Prefix Caching & Message Boundary Delta Snapping** (Techniques #45 & #60: sub-0.05s TTFT on multi-turn agent turns).
 7. **Era 7: The Strata Assimilation & DeepSeek V4.1 Flash Support** (Prefill Head Aliasing #55, KVA Recurrent Prefill #56, Disjoint Peer Guard #57, Batched DMA #58, Zero-Copy Exchange Pointer Rotation #59, Fused EXPDEC #61, Elastic VRAM API #62, and Native Engram Direct NVMe I/O with 5-Expert Faster Mode #63).
 8. **Intel Raptor Lake P-Core Affinity** and a strict **900 MB Wayland Compositor Safety Guard** (7,100 MB ceiling).
+9. **Era 15 & 16 Architectural Additions:** Heavy Hitter Oracle (H2O) dynamic KV eviction (#67), PagedAttention zero-fragmentation block tables with $\mathcal{O}(1)$ Copy-on-Write (#78), Sequence-Parallel Flash-Decoding across all 32 GPU SMs (#79), and GPUDirect Storage (`cuFile`) direct NVMe-to-VRAM DMA streaming (#80).
 
 The result? Your 8GB laptop runs **Nemotron 30B MoE at 35.35 tok/s**, generates **GLM-4.7-Flash at 22.3 tok/s flat across 128k context**, boots **GPT-OSS-120B (59 GB on disk) with 100% stability**, and runs **DeepSeek V4.1 Flash (GSQ_RCO) natively off SSD**. Built different. No cap. 🧢🚫
 
@@ -409,6 +410,24 @@ sandwich agent -m ~/ai-models/Qwen3.6-35B-A3B.gguf
 | `--peer-turbo-net` / `--no-peer-turbo-net` | None | **[Technique #64] 2-Bit Walsh-Hadamard Polar Net Quantization.** $8\times$ network activation compression via WHT butterfly rotation + Lloyd-Max centroids. | `true` |
 | `--peer-spec-pipe` / `--no-peer-spec-pipe` | None | **[Technique #65] Distributed Speculative Pipeline.** Pipelined candidate token verification across peer cluster nodes. | `true` |
 | `--peer-fallback` / `--no-peer-fallback` | None | **[Technique #66] Dynamic Zero-Crash Failover.** Instantly hot-swaps remote peer layers back to local 3-tier offload upon peer disconnect. | `true` |
+
+---
+
+### 13. ⚡ Era 15 & 16: Dispatch Engine & Core Architectural Upgrades (Techniques #73 – #80)
+
+| Flag | Arg | What it actually does | Default |
+| :--- | :---: | :--- | :---: |
+| `--dynamic-watermark` | None | **[Technique #73] Dynamic Memory Watermarking.** Live tracking with HWM 85% / LWM 70% tripwires to prevent OOM events. | `true` |
+| `--asym-prefetch` | None | **[Technique #74] Asymmetric Parallel Prefetch.** Lookahead pinned DDR5 DMA staging for shared weights and upcoming MoE experts. | `true` |
+| `--ram-cache` | `MB` | **[Technique #75] Dedicated Host RAM L2 Caching Layer.** 2MB THP-aligned LRU cache budget in MiB. | `2048` |
+| `--prefill-chunk-size` | `N` | **[Technique #76] Chunked Prefill Dynamic Scheduling.** Optimizes prefill chunks (64–128 for MoE, 256–512 for dense). | `128` |
+| `--h2o` | None | **[Technique #67 KV] Heavy Hitter Oracle (H2O) Dynamic KV Eviction.** Preserves sinks and heavy hitters, saving 7+ GB VRAM. | `false` |
+| `--h2o-budget` | `N` | Total active KV cache budget (sink + heavy hitters + window) in tokens. | `2048` |
+| `--h2o-heavy-hitters` | `N` | Number of dynamic heavy hitter tokens to retain. | `1024` |
+| `--flash-decoding` | None | **[Technique #79] Sequence-Parallel Flash-Decoding.** Splits KV into 256-tok chunks to saturate all 32 GPU SMs during decode. | `true` |
+| `--flash-decoding-chunk-size` | `N` | Sequence-Parallel Flash-Decoding partition chunk size in tokens. | `256` |
+| `--gds`, `--gpudirect-storage` | None | **[Technique #80] GPUDirect Storage (cuFile) Direct DMA Engine.** Direct NVMe-to-VRAM streaming with io_uring fallback. | `true` |
+| `--gds-batch-size` | `N` | GPUDirect Storage concurrent DMA transfer batch size. | `16` |
 
 </details>
 
