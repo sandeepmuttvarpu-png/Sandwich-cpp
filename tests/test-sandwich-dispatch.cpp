@@ -75,7 +75,7 @@ static void test_ram_estimator() {
 
     // 4. Real-time dynamic dispatch recommendation
     DynamicDispatchRecommendation rec = RAMEstimator::compute_realtime_dispatch(
-        fp_turbo4, ram, vram, true, ctx_64k, 7100
+        fp_turbo4, ram, vram, true, ctx_64k, 7800
     );
     SANDWICH_TEST_CHECK(rec.recommended_gpu_layers >= 0);
     SANDWICH_TEST_CHECK(rec.prefill_chunk_size > 0);

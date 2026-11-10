@@ -66,7 +66,7 @@
       "type": "object",
       "required": ["wayland_vram_guard_mb", "ram_rule_42_ratio"],
       "properties": {
-        "wayland_vram_guard_mb": { "type": "integer", "const": 7100 },
+        "wayland_vram_guard_mb": { "type": "integer", "const": 7800 },
         "ram_rule_42_ratio": { "type": "number", "const": 0.70 }
       }
     }

@@ -5994,7 +5994,7 @@ void server_routes::init_routes() {
         }
 
         size_t vram_used_mb     = vram_total_mb > vram_free_mb ? (vram_total_mb - vram_free_mb) : 0;
-        size_t wayland_guard_mb = 7100; // HP Victus Wayland desktop compositor guard
+        size_t wayland_guard_mb = 7800; // HP Victus Wayland desktop compositor guard
         size_t target_budget_mb = elastic_target_budget_mb;
 
         json data = {
@@ -6021,8 +6021,8 @@ void server_routes::init_routes() {
         if (body.contains("target_budget_mb")) {
             int32_t new_budget_mb = body.at("target_budget_mb").get<int32_t>();
             if (new_budget_mb > 0) {
-                if (new_budget_mb > 7100) {
-                    new_budget_mb = 7100; // Enforce Wayland safety guard
+                if (new_budget_mb > 7800) {
+                    new_budget_mb = 7800; // Enforce Wayland safety guard
                 }
                 elastic_target_budget_mb = (size_t)new_budget_mb;
                 SRV_INF("[Technique #62] Elastic VRAM budget dynamically resized to %d MiB\n", new_budget_mb);

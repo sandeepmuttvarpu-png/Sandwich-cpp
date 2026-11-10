@@ -88,7 +88,7 @@ public:
         const RealtimeVRAMStats & vram,
         bool is_moe,
         int context_length,
-        uint64_t max_wayland_guard_mb = 7100
+        uint64_t max_wayland_guard_mb = 7800
     );
 };
 

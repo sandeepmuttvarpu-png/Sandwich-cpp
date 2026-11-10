@@ -9,7 +9,7 @@ namespace sandwich {
 namespace dispatch {
 
 // Invariant Constants
-constexpr uint64_t WAYLAND_VRAM_GUARD_MB = 7100; // Hard invariant: 7,100 MB max VRAM allocation
+constexpr uint64_t WAYLAND_VRAM_GUARD_MB = 7800; // Hard invariant: 7,800 MB max VRAM allocation
 constexpr double   RAM_RULE_42_RATIO     = 0.70; // Hard invariant: Technique #42 (70% Max Host RAM)
 constexpr int      FALLBACK_THREADS      = 4;
 constexpr uint64_t FALLBACK_VRAM_MB      = 4096;
