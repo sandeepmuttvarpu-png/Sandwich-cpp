@@ -20,6 +20,9 @@ public:
     // Runs standalone model scan and prints discovery table
     static int run_standalone_scan(const std::vector<std::string> & paths);
 
+    // Auto-tunes hardware offloading and launches inference
+    static int auto_calibrate_and_dispatch(int argc, char ** argv);
+
 private:
     static bool is_manual_cli_invocation(int argc, char ** argv);
 };

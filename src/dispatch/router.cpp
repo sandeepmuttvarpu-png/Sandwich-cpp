@@ -9,6 +9,8 @@
 #include <vector>
 #include <cstring>
 #include <unistd.h>
+#include <algorithm>
+#include <cctype>
 
 // Forward declaration of engine execution entry point
 int llama_cli(int argc, char ** argv);
@@ -94,6 +96,184 @@ int Router::run_standalone_scan(const std::vector<std::string> & paths) {
     return 0;
 }
 
+int Router::auto_calibrate_and_dispatch(int argc, char ** argv) {
+    // 1. Scan arguments for model path and user overrides
+    std::string model_path;
+    bool has_model = false;
+    bool has_ngl = false;
+    bool has_threads = false;
+    bool has_ctx = false;
+    bool has_kv = false;
+    bool has_fa = false;
+    bool has_spec = false;
+    bool has_vram_guard = false;
+    bool has_moe_3tier = false;
+    bool has_chunked_prefill = false;
+    int user_ctx = 4096;
+
+    int start_i = 1;
+    if (argc >= 2 && std::strcmp(argv[1], "run") == 0) {
+        start_i = 2;
+    }
+
+    for (int i = start_i; i < argc; ++i) {
+        std::string a = argv[i];
+        if ((a == "-m" || a == "--model") && i + 1 < argc) {
+            model_path = argv[i + 1];
+            has_model = true;
+        } else if (a == "-ngl" || a == "--n-gpu-layers") {
+            has_ngl = true;
+        } else if (a == "-t" || a == "--threads") {
+            has_threads = true;
+        } else if (a == "-c" || a == "--ctx-size") {
+            has_ctx = true;
+            if (i + 1 < argc) user_ctx = std::atoi(argv[i + 1]);
+        } else if (a == "-ctk" || a == "-ctv" || a == "--cache-type-k" || a == "--kv-type") {
+            has_kv = true;
+        } else if (a == "-fa" || a == "--flash-attn" || a == "--no-fa") {
+            has_fa = true;
+        } else if (a == "-md" || a == "--model-draft" || a == "--native-mtp" || a == "--spec-type") {
+            has_spec = true;
+        } else if (a == "--vram-guard" || a == "-fitt") {
+            has_vram_guard = true;
+        } else if (a == "--io-uring" || a == "--moe-3tier" || a == "--no-moe-3tier") {
+            has_moe_3tier = true;
+        } else if (a == "--chunked-prefill") {
+            has_chunked_prefill = true;
+        }
+    }
+
+    // If no model specified or user explicitly supplied manual -ngl, pass through directly to llama_cli
+    if (!has_model || has_ngl) {
+        if (argc >= 2 && std::strcmp(argv[1], "run") == 0) {
+            return llama_cli(argc - 1, argv + 1);
+        }
+        return llama_cli(argc, argv);
+    }
+
+    // Inspect GGUF model metadata
+    ModelMetadata meta;
+    if (!ModelScanner::inspect_gguf_file(model_path, meta)) {
+        if (argc >= 2 && std::strcmp(argv[1], "run") == 0) {
+            return llama_cli(argc - 1, argv + 1);
+        }
+        return llama_cli(argc, argv);
+    }
+
+    // Load or run hardware profiling
+    HardwareProfile profile = HardwareProfiler::load_or_profile();
+
+    // Compute optimal 3-tier offloading and resource limits
+    TieringPlan plan = HardwareProfiler::calculate_tiering(
+        profile,
+        meta.size_bytes,
+        meta.total_layers,
+        meta.is_moe,
+        meta.expert_count,
+        meta.active_experts,
+        user_ctx,
+        "turbo4"
+    );
+
+    // Build synthesized auto-calibrated CLI arguments
+    std::vector<std::string> args;
+    args.push_back(argv[0]);
+
+    // Keep all original arguments (skipping 'run' token)
+    for (int i = start_i; i < argc; ++i) {
+        args.push_back(argv[i]);
+    }
+
+    // Inject optimal parameters that were omitted by user
+    if (!has_ngl) {
+        args.push_back("-ngl");
+        args.push_back(std::to_string(plan.gpu_layers));
+    }
+    if (!has_threads) {
+        args.push_back("-t");
+        args.push_back(std::to_string(profile.cpu.optimal_threads));
+    }
+    if (!has_fa && profile.gpu.cuda_available) {
+        args.push_back("-fa");
+    }
+    if (!has_kv) {
+        args.push_back("-ctk");
+        args.push_back("turbo4");
+        args.push_back("-ctv");
+        args.push_back("turbo4");
+        args.push_back("--turbo-kvran");
+    }
+    if (!has_vram_guard && profile.gpu.cuda_available) {
+        args.push_back("--vram-guard");
+        args.push_back(std::to_string(profile.gpu.wayland_guard_vram_mb) + "M");
+    }
+    if (meta.is_moe && !has_moe_3tier) {
+        args.push_back("--io-uring");
+        args.push_back("--io-uring-qd");
+        args.push_back("128");
+        args.push_back("--moe-2q");
+        if (plan.tier2_warm_ddr5_mb > 0) {
+            args.push_back("--moe-warm-ram-mb");
+            args.push_back(std::to_string(plan.tier2_warm_ddr5_mb));
+        }
+    }
+    if (!has_chunked_prefill) {
+        args.push_back("--chunked-prefill");
+        args.push_back("--prefill-chunk-size");
+        args.push_back(meta.is_moe ? "128" : "256");
+        args.push_back("--dynamic-watermark");
+        args.push_back("--asym-prefetch");
+    }
+
+    std::string spec_note = "None (Standard Single-Token Generation)";
+    if (!has_spec) {
+        std::string lower_fn = meta.filename;
+        std::transform(lower_fn.begin(), lower_fn.end(), lower_fn.begin(), ::tolower);
+        if (lower_fn.find("mtp") != std::string::npos) {
+            args.push_back("--native-mtp");
+            spec_note = "Phase 14 Zero-Memory Native MTP Rollout";
+        } else {
+            ModelCatalog cat = ModelScanner::load_or_scan();
+            for (const auto & d : cat.drafters) {
+                std::string df = d.filename;
+                std::transform(df.begin(), df.end(), df.begin(), ::tolower);
+                if ((df.find("qwen3.6-35b") != std::string::npos && lower_fn.find("qwen3.6-35b") != std::string::npos) ||
+                    (df.find("qwen3.8") != std::string::npos && lower_fn.find("qwen3.8") != std::string::npos)) {
+                    args.push_back("-md");
+                    args.push_back(d.file_path);
+                    args.push_back("--spec-type");
+                    args.push_back("draft-dflash");
+                    spec_note = "DFlash2 Speculative Drafter (" + d.filename + ")";
+                    break;
+                }
+            }
+        }
+    }
+
+    // Output clean diagnostic banner
+    std::cout << "\033[1;38;2;229;169;59m🥪 Sandwich.cpp Auto-Calibrator (Zero-Config Silicon Tuning)\033[0m\n";
+    std::cout << "  \033[1;38;2;78;201;176m• Host Hardware :\033[0m " << profile.gpu.device_name
+              << " (" << profile.gpu.total_vram_mb << " MiB VRAM) | " << profile.cpu.model_name
+              << " (" << profile.cpu.optimal_threads << " P-Cores) | " << (profile.ram.total_mb / 1024) << " GB RAM\n";
+    std::cout << "  \033[1;38;2;78;201;176m• Model Topology:\033[0m " << meta.display_name
+              << " (" << (meta.is_moe ? "MoE " + std::to_string(meta.expert_count) + " exps" : "Dense")
+              << ", " << std::fixed << std::setprecision(1) << meta.size_gb << " GB)\n";
+    std::cout << "  \033[1;38;2;78;201;176m• Auto-Plan     :\033[0m -ngl " << plan.gpu_layers
+              << " | -t " << profile.cpu.optimal_threads << " | -ctk turbo4 | --turbo-kvran"
+              << (meta.is_moe ? " | 3-Tier io_uring DMA" : "") << "\n";
+    std::cout << "  \033[1;38;2;78;201;176m• Speculative   :\033[0m " << spec_note << "\n";
+    std::cout << "  \033[1;38;2;78;201;176m• Dynamic Guard :\033[0m " << profile.gpu.wayland_guard_vram_mb
+              << " MB Dynamic VRAM Guard | 70% Host RAM Cap\n\n";
+
+    // Prepare C-style argv array
+    std::vector<char*> c_args;
+    for (const auto & s : args) {
+        c_args.push_back(const_cast<char*>(s.c_str()));
+    }
+
+    return llama_cli(static_cast<int>(c_args.size()), c_args.data());
+}
+
 int Router::route(int argc, char ** argv) {
     // Case 1: Standalone Profiler flag
     if (argc >= 2 && (std::strcmp(argv[1], "--tune") == 0 || std::strcmp(argv[1], "--profile") == 0)) {
@@ -115,13 +295,9 @@ int Router::route(int argc, char ** argv) {
         return 0;
     }
 
-    // Case 4: Manual CLI flags provided -> Bypass TUI directly
+    // Case 4: Manual CLI flags or auto-dispatch
     if (is_manual_cli_invocation(argc, argv)) {
-        // If user ran: sandwich run -m ... skip 'run' token
-        if (argc >= 2 && std::strcmp(argv[1], "run") == 0) {
-            return llama_cli(argc - 1, argv + 1);
-        }
-        return llama_cli(argc, argv);
+        return auto_calibrate_and_dispatch(argc, argv);
     }
 
     // Case 5: Interactive TUI Wizard (default for argc == 1 or --tui)

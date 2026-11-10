@@ -311,15 +311,34 @@ GPUProfile HardwareProfiler::detect_gpu() {
     gpu.total_vram_mb  = s.total_mb;
     gpu.free_vram_mb   = s.free_mb;
 
-    // Invariant: 7,100 MB Wayland VRAM Guard
-    // Leaves desktop compositor buffer and guarantees zero CUDA OOM errors
-    if (gpu.total_vram_mb > 1000) {
-        uint64_t desktop_cushion = 850;
-        uint64_t max_usable = (gpu.total_vram_mb > desktop_cushion) ? (gpu.total_vram_mb - desktop_cushion) : gpu.total_vram_mb;
-        gpu.wayland_guard_vram_mb = std::min(max_usable, WAYLAND_VRAM_GUARD_MB);
-    } else {
-        gpu.wayland_guard_vram_mb = std::min(gpu.total_vram_mb, WAYLAND_VRAM_GUARD_MB);
+    // Dynamic Universal VRAM Guard & Display Topology Detection
+    // 1. Probes if discrete GPU drives active display via DRM sysfs.
+    //    If driving display: leaves 800MB - 1GB cushion for desktop compositor (Wayland/X11).
+    //    If headless or secondary compute device (e.g. laptop hybrid iGPU mode): leaves 350-400MB cushion for cuBLAS/CUDA workspace.
+    bool dgpu_has_display = false;
+    std::error_code drm_ec;
+    if (fs::exists("/sys/class/drm", drm_ec)) {
+        for (const auto & entry : fs::directory_iterator("/sys/class/drm", drm_ec)) {
+            std::string name = entry.path().filename().string();
+            if (name.find("card") != std::string::npos && name.find("-") != std::string::npos) {
+                std::ifstream sf(entry.path() / "status");
+                std::string status;
+                if (sf >> status && status == "connected") {
+                    std::string dev_link = fs::canonical(entry.path() / "device", drm_ec).string();
+                    if (dev_link.find("01:00.0") != std::string::npos || dev_link.find("nvidia") != std::string::npos) {
+                        dgpu_has_display = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
+
+    uint64_t vram_cushion = dgpu_has_display
+        ? std::max<uint64_t>(800, static_cast<uint64_t>(gpu.total_vram_mb * 0.08))
+        : std::max<uint64_t>(350, static_cast<uint64_t>(gpu.total_vram_mb * 0.045));
+
+    gpu.wayland_guard_vram_mb = (gpu.total_vram_mb > vram_cushion) ? (gpu.total_vram_mb - vram_cushion) : gpu.total_vram_mb;
 
     // Estimate bandwidth
     if (gpu.device_name.find("5050") != std::string::npos) {

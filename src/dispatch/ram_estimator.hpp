@@ -38,6 +38,7 @@ struct ModelMemoryFootprint {
     uint64_t kv_cache_mb          = 0;
     uint64_t scratchpad_vram_mb   = 0;
     uint64_t estimated_total_mb   = 0;
+    int      total_layers         = 32;
 
     // Per-layer breakdowns
     double   mb_per_dense_layer   = 0.0;

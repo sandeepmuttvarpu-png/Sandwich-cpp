@@ -152,6 +152,7 @@ ModelMemoryFootprint RAMEstimator::calculate_footprint(
     ModelMemoryFootprint fp;
     fp.total_weights_mb = model_bytes / (1024 * 1024);
     int safe_layers = (total_layers > 0) ? total_layers : 32;
+    fp.total_layers = safe_layers;
 
     if (is_moe && expert_count > 0 && active_experts > 0) {
         // MoE models: ~20% dense shared projections, ~80% sparse expert MLPs
@@ -236,7 +237,11 @@ DynamicDispatchRecommendation RAMEstimator::compute_realtime_dispatch(
     rec.target_vram_budget_mb = vram_safe_ceiling;
 
     // 3. Compute GPU Layer Offload
-    if (vram.cuda_available && footprint.mb_per_dense_layer > 0.0) {
+    double mb_per_full_layer = (footprint.total_layers > 0)
+        ? (static_cast<double>(footprint.total_weights_mb) / footprint.total_layers)
+        : footprint.mb_per_dense_layer;
+
+    if (vram.cuda_available && mb_per_full_layer > 0.0) {
         if (footprint.total_weights_mb <= vram_for_weights) {
             // Full offload
             rec.recommended_gpu_layers = 999;
@@ -244,8 +249,8 @@ DynamicDispatchRecommendation RAMEstimator::compute_realtime_dispatch(
             rec.status_reason = "Model fits 100% in GPU VRAM with full KV cache allocation.";
         } else {
             // Partial offload: Sandwich 3-Tier Split
-            int layers_offload = static_cast<int>(vram_for_weights / footprint.mb_per_dense_layer);
-            rec.recommended_gpu_layers = std::max(0, layers_offload);
+            int layers_offload = static_cast<int>(vram_for_weights / mb_per_full_layer);
+            rec.recommended_gpu_layers = std::min(footprint.total_layers, std::max(0, layers_offload));
 
             uint64_t unoffloaded_weights_mb = (footprint.total_weights_mb > vram_for_weights)
                                                 ? (footprint.total_weights_mb - vram_for_weights)
