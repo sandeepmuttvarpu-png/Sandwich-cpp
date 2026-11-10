@@ -21,6 +21,11 @@ struct llama_cparams;
 struct llama_layer;
 struct llama_prec_policy;
 
+struct llm_graph_moe_cache_slots {
+    ggml_tensor * slots;
+    ggml_tensor * cpu_ids;
+};
+
 class llama_moe_cache;
 
 struct llama_memory_context_i;
@@ -1093,7 +1098,8 @@ struct llm_graph_context {
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
               ggml_tensor * w_s   = nullptr,
-              ggml_tensor * slots = nullptr) const;
+              ggml_tensor * slots = nullptr,
+                     bool   cached = true) const;
 
     ggml_tensor * build_norm(
              ggml_tensor * cur,
@@ -1193,12 +1199,14 @@ struct llm_graph_context {
             const llama_layer * moe_cache = nullptr) const;
 
     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
-    ggml_tensor * build_moe_cache_slots(
+    // cpu_ids: the selected experts computed on the CPU, nullptr if none
+    llm_graph_moe_cache_slots build_moe_cache_slots(
              ggml_tensor * selected_experts,
              ggml_tensor * up_exps,
              ggml_tensor * gate_exps,
              ggml_tensor * down_exps,
              ggml_tensor * gate_up_exps,
+                    bool   cpu_part,
                      int   il) const;
 
     //

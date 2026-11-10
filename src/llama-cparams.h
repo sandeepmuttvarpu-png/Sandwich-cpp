@@ -78,6 +78,7 @@ struct llama_cparams {
     size_t moe_cache_size;
     size_t moe_warm_ram_bytes;
     float  moe_mass_thresh;
+    float  moe_cache_cpu_share = 0.0f;
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 

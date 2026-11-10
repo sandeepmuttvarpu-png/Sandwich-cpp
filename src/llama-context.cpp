@@ -317,6 +317,7 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size     = params.moe_cache_size;
+    cparams.moe_cache_cpu_share= params.moe_cache_cpu_share;
     cparams.moe_warm_ram_bytes = params.moe_warm_ram_bytes;
     cparams.moe_3tier          = params.moe_3tier;
     cparams.io_uring_qd        = params.io_uring_qd;
@@ -560,6 +561,7 @@ llama_context::llama_context(
             size_t vram_cache_sz = cparams.moe_cache_size > 0 ? cparams.moe_cache_size : 256ULL * 1024 * 1024;
             moe_cache = std::make_unique<llama_moe_cache>(
                 model, backend_ptrs, backend_buft, vram_cache_sz,
+                cparams.moe_cache_cpu_share,
                 cparams.moe_warm_ram_bytes, cparams.moe_3tier, cparams.moe_2q,
                 cparams.dma_batch, cparams.moe_disjoint_guard, cparams.moe_exchange_rot,
                 cparams.io_uring_qd);
@@ -4331,6 +4333,7 @@ llama_context_params llama_context_default_params() {
         /*.moe_cache_size              =*/ 0,
         /*.moe_warm_ram_bytes          =*/ 0,
         /*.moe_mass_thresh             =*/ 0.96f,
+        /*.moe_cache_cpu_share         =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

@@ -176,8 +176,55 @@ int main() {
         }
     }
 
+    // Test Technique #81: CPU Miss Sharing with Zero-Slot Allocation & Continuous CRF Decay
+    {
+        llama_moe_cache_detail::moe_cache_lru lru;
+        lru.init(1, 16, 4, false); // 1 layer, 16 experts, 4 slots
+        std::vector<int32_t> slot_map(16, -1);
+        lru.slot_map[0] = slot_map.data();
+        const int32_t n_zero = 2;
+        std::vector<llama_moe_cache_detail::moe_cache_lru::fill> fills;
+        std::vector<llama_moe_cache_detail::moe_cache_lru::fill> cpu;
+        std::vector<llama_moe_cache_detail::moe_cache_lru::eviction> evictions;
+        size_t n_hit = 0;
+
+        // 1. Fill the 4 real slots with experts 0, 1, 2, 3
+        int32_t req1[] = { 0, 1, 2, 3 };
+        auto no_cpu = [](size_t) -> size_t { return 0; };
+        lru.plan(0, req1, 4, 1, 4, n_zero, no_cpu, fills, cpu, evictions, n_hit);
+        if (fills.size() != 4 || cpu.size() != 0 || n_hit != 0) {
+            std::fprintf(stderr, "CPU Share Test: Initial fill failed (fills=%zu, cpu=%zu)\n", fills.size(), cpu.size());
+            ok = false;
+        }
+
+        // 2. Next request with cache full: 2 misses (experts 4, 5). Let n_cpu request 1 miss to CPU.
+        int32_t req2[] = { 0, 1, 4, 5 };
+        auto half_cpu = [](size_t n_miss) -> size_t { return n_miss / 2; };
+        lru.plan(0, req2, 4, 1, 4, n_zero, half_cpu, fills, cpu, evictions, n_hit);
+        if (n_hit != 2) {
+            std::fprintf(stderr, "CPU Share Test: Expected 2 hits, got %zu\n", n_hit);
+            ok = false;
+        }
+        if (cpu.size() != 1) {
+            std::fprintf(stderr, "CPU Share Test: Expected 1 CPU miss, got %zu\n", cpu.size());
+            ok = false;
+        }
+        if (fills.size() != 1) {
+            std::fprintf(stderr, "CPU Share Test: Expected 1 GPU fill, got %zu\n", fills.size());
+            ok = false;
+        }
+        // Check that the CPU miss was assigned a zero slot (4 <= slot < 4 + n_zero)
+        if (!cpu.empty()) {
+            int32_t cpu_slot = cpu[0].slot;
+            if (cpu_slot < 4 || cpu_slot >= 4 + n_zero) {
+                std::fprintf(stderr, "CPU Share Test: CPU slot %d not in zero slot range [4, 6)\n", cpu_slot);
+                ok = false;
+            }
+        }
+    }
+
     if (ok) {
-        std::printf("test-moe-cache-shares: ALL PASS (including Phase 6 Fine-Grained, Phase 12 3-Tier MoE Engine, and Phase 12 2Q & Ghost-Cache)\n");
+        std::printf("test-moe-cache-shares: ALL PASS (including Phase 6 Fine-Grained, Phase 12 3-Tier MoE Engine, Phase 12 2Q & Ghost-Cache, and Technique #81 CPU Miss Sharing)\n");
         return 0;
     }
     return 1;

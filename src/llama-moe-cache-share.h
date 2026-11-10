@@ -195,6 +195,29 @@ struct moe_cache_lru {
     uint32_t seen_gen = 0;
     std::vector<int32_t> uniq;
 
+    // CPU Miss Sharing state (PR #30966 / Technique #81)
+    std::vector<int32_t> misses;
+    std::vector<uint64_t> token_zero;
+    std::vector<float>   crf;      // [n_layer*n_expert]
+    std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
+    std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer
+    static constexpr float crf_half_life = 64.0f; // half-life in tokens
+
+    int32_t make_key(int32_t il, int32_t e) const { return il * n_expert + e; }
+    float decayed_crf(int32_t il, int32_t key) const {
+        return crf.empty() ? 0.0f : crf[key] * std::exp2(-(clock[il] - last_use[key]) / crf_half_life);
+    }
+    void use_expert(int32_t il, int32_t e) {
+        if (!crf.empty()) {
+            int32_t key = make_key(il, e);
+            crf[key] = decayed_crf(il, key) + 1.0f;
+            last_use[key] = clock[il];
+        }
+    }
+    bool is_full() const {
+        return use_2q ? (size_free == 0) : (n_slots > 0);
+    }
+
     void list_remove(int32_t & l_head, int32_t & l_tail, int32_t & l_size, int32_t s) {
         if (s < 0) return;
         if (prev[s] >= 0) {
@@ -285,6 +308,10 @@ struct moe_cache_lru {
         seen.assign(n_expert, 0);
         seen_gen = 0;
 
+        crf.assign((size_t) n_layer * n_expert, 0.0f);
+        last_use.assign((size_t) n_layer * n_expert, -1);
+        clock.assign(n_layer, 0);
+
         stat_ghost_hits = 0;
         stat_promotions_2q = 0;
         stat_pollution_quarantined = 0;
@@ -341,8 +368,11 @@ struct moe_cache_lru {
         tail = s;
     }
 
-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, std::vector<eviction> & evictions, size_t & n_hit) {
+    template <typename F>
+    bool plan(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tokens, int32_t n_used, int32_t n_zero, F && n_cpu,
+            std::vector<fill> & fills, std::vector<fill> & cpu, std::vector<eviction> & evictions, size_t & n_hit) {
         fills.clear();
+        cpu.clear();
         evictions.clear();
         n_hit = 0;
 
@@ -362,21 +392,104 @@ struct moe_cache_lru {
             return false;
         }
 
+        if (il >= 0 && (size_t)il < clock.size()) {
+            clock[il] += n_tokens;
+        }
+
         int32_t * slots = slot_map[il];
 
+        misses.clear();
         if (!use_2q) {
             // Naive single-queue LRU fallback
             for (int32_t e : uniq) {
-                if (slots[e] >= 0) {
+                use_expert(il, e);
+                if (slots[e] >= 0 && slots[e] < n_slots) {
                     touch_lru(slots[e]);
                     n_hit++;
+                } else {
+                    misses.push_back(e);
                 }
             }
-            std::sort(uniq.begin(), uniq.end());
+        } else {
+            // Phase 12: 2Q & Ghost-Cache Replacement Policy
+            if (++plan_gen == 0) {
+                std::fill(slot_locked.begin(), slot_locked.end(), 0);
+                plan_gen = 1;
+            }
+
+            // Step 1: Process HITS
             for (int32_t e : uniq) {
-                if (slots[e] >= 0) {
+                use_expert(il, e);
+                if (slots[e] >= 0 && slots[e] < n_slots) {
+                    const int32_t s = slots[e];
+                    n_hit++;
+                    slot_locked[s] = plan_gen;
+
+                    if (queue_of[s] == moe_slot_queue::QUEUE_A1IN) {
+                        // Hit while in probation: recurrent access proven -> promote to Am!
+                        list_remove(head_in, tail_in, size_in, s);
+                        list_push_tail(head_am, tail_am, size_am, s);
+                        queue_of[s] = moe_slot_queue::QUEUE_AM;
+                        stat_promotions_2q++;
+                    } else if (queue_of[s] == moe_slot_queue::QUEUE_AM) {
+                        // Hit in frequent queue: touch to MRU of Am
+                        list_remove(head_am, tail_am, size_am, s);
+                        list_push_tail(head_am, tail_am, size_am, s);
+                    }
+                } else {
+                    misses.push_back(e);
+                }
+            }
+        }
+
+        // Step 2: CPU Miss Partitioning (PR #30966 & Technique #81)
+        const size_t n_c = (n_zero > 0 && n_used > 0 && n_tokens > 0) ? std::min(n_cpu(misses.size()), misses.size()) : 0;
+        if (n_c > 0) {
+            std::sort(misses.begin(), misses.end(), [&](int32_t a, int32_t b) {
+                const float crf_a = !crf.empty() ? crf[make_key(il, a)] : 0.0f;
+                const float crf_b = !crf.empty() ? crf[make_key(il, b)] : 0.0f;
+                return crf_a != crf_b ? crf_a < crf_b : a < b;
+            });
+
+            GGML_ASSERT((size_t) n_tokens * n_used == n_ids);
+            token_zero.assign(n_tokens, 0);
+            size_t n_keep = n_c;
+            for (size_t i = 0; i < n_keep; ) {
+                const int32_t e = misses[i];
+                uint64_t used = 0;
+                for (int64_t it = 0; it < n_tokens; ++it) {
+                    for (int32_t k = 0; k < n_used; ++k) {
+                        if (ids[it * n_used + k] == e) {
+                            used |= token_zero[it];
+                        }
+                    }
+                }
+                int32_t z = 0;
+                while (z < 64 && (used >> z & 1)) {
+                    z++;
+                }
+                if (z >= n_zero) {
+                    std::swap(misses[i], misses[--n_keep]);
                     continue;
                 }
+                for (int64_t it = 0; it < n_tokens; ++it) {
+                    for (int32_t k = 0; k < n_used; ++k) {
+                        if (ids[it * n_used + k] == e) {
+                            token_zero[it] |= 1ull << z;
+                        }
+                    }
+                }
+                slots[e] = n_slots + z;
+                cpu.push_back({ e, n_slots + z });
+                i++;
+            }
+            misses.erase(misses.begin(), misses.begin() + n_keep);
+        }
+
+        // Step 3: Process remaining MISSES into real VRAM slots
+        std::sort(misses.begin(), misses.end());
+        if (!use_2q) {
+            for (int32_t e : misses) {
                 const int32_t s = head;
                 if (key_of[s].il >= 0 && key_of[s].expert >= 0) {
                     evictions.push_back({ key_of[s].il, key_of[s].expert, s });
@@ -390,43 +503,7 @@ struct moe_cache_lru {
             return true;
         }
 
-        // Phase 12: 2Q & Ghost-Cache Replacement Policy
-        if (++plan_gen == 0) {
-            std::fill(slot_locked.begin(), slot_locked.end(), 0);
-            plan_gen = 1;
-        }
-
-        // Step 1: Process HITS
-        for (int32_t e : uniq) {
-            if (slots[e] >= 0) {
-                const int32_t s = slots[e];
-                n_hit++;
-                slot_locked[s] = plan_gen;
-
-                if (queue_of[s] == moe_slot_queue::QUEUE_A1IN) {
-                    // Hit while in probation: recurrent access proven -> promote to Am!
-                    list_remove(head_in, tail_in, size_in, s);
-                    list_push_tail(head_am, tail_am, size_am, s);
-                    queue_of[s] = moe_slot_queue::QUEUE_AM;
-                    stat_promotions_2q++;
-                } else if (queue_of[s] == moe_slot_queue::QUEUE_AM) {
-                    // Hit in frequent queue: touch to MRU of Am
-                    list_remove(head_am, tail_am, size_am, s);
-                    list_push_tail(head_am, tail_am, size_am, s);
-                }
-            }
-        }
-
-        // Step 2: Process MISSES
-        std::sort(uniq.begin(), uniq.end());
-        for (int32_t e : uniq) {
-            if (slots[e] >= 0) {
-                continue;
-            }
-
-            // Note: If peer tier (DDR5 RAM) holds this expert, it will be uploaded from RAM via PCIe DMA in ensure_warm_batch,
-            // but it still MUST be allocated a valid VRAM bank slot s here so that CUDA kernels do not index bank[-1].
-
+        for (int32_t e : misses) {
             const bool is_ghost = in_ghost(il, e);
             if (is_ghost) {
                 stat_ghost_hits++;
@@ -468,7 +545,6 @@ struct moe_cache_lru {
                 evictions.push_back({ key_of[s].il, key_of[s].expert, s });
                 slot_map[key_of[s].il][key_of[s].expert] = -1;
                 if (was_in_a1in) {
-                    // Evicted from probation without second reference: add key to Ghost Cache
                     add_ghost(key_of[s].il, key_of[s].expert);
                     stat_pollution_quarantined++;
                 }
@@ -479,18 +555,21 @@ struct moe_cache_lru {
             slot_locked[s] = plan_gen;
 
             if (is_ghost) {
-                // Direct promotion into Am
                 queue_of[s] = moe_slot_queue::QUEUE_AM;
                 list_push_tail(head_am, tail_am, size_am, s);
             } else {
-                // New transient candidate into A1in (probation)
                 queue_of[s] = moe_slot_queue::QUEUE_A1IN;
                 list_push_tail(head_in, tail_in, size_in, s);
             }
             fills.push_back({ e, s });
         }
-
         return true;
+    }
+
+    // Overload for backwards compatibility
+    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, std::vector<eviction> & evictions, size_t & n_hit) {
+        std::vector<fill> dummy_cpu;
+        return plan(il, ids, n_ids, 1, (int32_t)n_ids, 0, [](size_t) -> size_t { return 0; }, fills, dummy_cpu, evictions, n_hit);
     }
 };
 

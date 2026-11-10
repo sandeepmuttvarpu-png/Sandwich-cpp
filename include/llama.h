@@ -418,6 +418,7 @@ extern "C" {
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
         size_t moe_warm_ram_bytes; // Phase 12: Tier 2 WARM DDR5 RAM pool budget in bytes (0 = default 12GB)
         float  moe_mass_thresh;    // Technique #47: Dynamic MoE Softmax Entropy Pruning (Top-K Weight Mass Throttling, default: 0.96f)
+        float  moe_cache_cpu_share;// share of the MoE cache misses that the CPU computes from the host experts (default: 0.0)
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
