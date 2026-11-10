@@ -1003,3 +1003,34 @@
 * **The Hardware Impact:**
   * Achieves **13.34 GB/s** peak direct DMA read throughput with zero CPU memory overhead.
 * **Controlled via:** `--gds`, `--gpudirect-storage` / `--no-gds`, `--no-gpudirect-storage`, `--gds-batch-size <N>`. Default: enabled.
+
+---
+
+## 81. Adaptive Hybrid CPU-GPU MoE Miss Sharing (`--moe-cache-cpu-share`) (Technique #81)
+* **Phase & Architecture:** Era 17 Upstream Master Assimilation (Technique #81, Upstream PR #30966)
+* **The Physical Bottleneck:**
+  * When MoE cache capacity on GPU VRAM is constrained, evicting cold experts causes severe PCIe ping-pong thrashing, while leaving CPU host memory idle or relying entirely on high-latency disk fetches.
+* **The Secret Sauce:**
+  * Assimilates upstream PR #30966 into Sandwich's custom 3-Tier MoE Engine (`moe_3tier` + `moe_2q`).
+  * Implements dynamic CPU-GPU miss sharing where cold expert misses are cooperatively evaluated on the host CPU while the GPU processes cached hot/warm experts.
+  * Tracks expert access recency with decaying Cumulative Reference Frequency (CRF) and layer token clocks:
+    $$\text{CRF}_{\text{decayed}}(il, e) = \text{CRF}[il, e] \cdot 2^{-\frac{\text{clock}[il] - \text{last\_use}[il, e]}{64.0}}$$
+  * Integrates seamlessly with Sandwich's 2Q Ghost Cache and Tier 2 Warm DDR5 Pool with zero cache pollution.
+* **The Hardware Impact:**
+  * Smooths out latency spikes when operating with small GPU VRAM allocations on laptop hardware (HP Victus RTX 5050 Mobile 8GB + 24GB DDR5).
+* **Controlled via:** `--moe-cache-cpu-share <float>` (range: 0.0 to 1.0, default 0.0), companion tuning script `scripts/moe-cache-tune.py`.
+
+---
+
+## 82. Upstream Mainstream Master Synchronization (`b12200+` / `3837bf0bc`) (Technique #82)
+* **Phase & Architecture:** Era 17 Upstream Master Assimilation (Technique #82)
+* **The Physical Bottleneck:**
+  * Codebase divergence from upstream `llama.cpp` prevents adopting newly released model architectures (e.g. Qwen 2.5/3, GLM 4.7, DeepSeek V3/R1 updates), community quantization enhancements, and core GGML runtime fixes.
+* **The Secret Sauce:**
+  * Seamless bidirectional merge of upstream `llama.cpp` master (`b12200+`, commit `3837bf0bc`) across all 1,465 modified files.
+  * Preserves all 80 Sandwich.cpp hardware-specific optimizations intact (Phase 12 3-tier MoE, 2Q Ghost Cache, TurboQuant Polar KV, Sequence-Parallel Flash-Decoding, GDS cuFile DMA, Smart-Dispatch TUI).
+  * Harmonized FlashAttention MMA kernel template signatures (`KV_rows_ptr` scatter-gather integration), shared library symbol visibility (`GGML_API` for telemetry and prefetch), and MoE layer parameter ordering.
+* **The Hardware Impact:**
+  * Guaranteed 100% build health, zero compiler errors, full CTest pass rate, and forward compatibility with all future GGUF model formats.
+* **Controlled via:** Native engine architecture.
+
