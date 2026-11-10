@@ -2698,7 +2698,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         return experts;
     };
 
-    ggml_tensor * experts = build_experts(cur, selected_experts, cache.slots, true);
+    experts = build_experts(cur, selected_experts, cache.slots, true);
     if (cache.cpu_ids != nullptr) {
         // the cached experts and the misses computed from the host experts, each reads the others as zero
         // the cached experts come first in the graph, so that they are computed while the misses are
@@ -2706,6 +2706,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         experts = ggml_add(ctx0, experts, build_experts(cur, selected_experts, cache.cpu_ids, false));
         cb(experts, "ffn_moe_down_merged", il);
     }
+    }
+
+    if (down_exps_s) {
+        cb(experts, "ffn_moe_down_scaled", il);
     }
 
     if (down_exps_b) {
