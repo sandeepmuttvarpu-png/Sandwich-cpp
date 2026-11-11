@@ -140,6 +140,8 @@ struct server_routes {
     server_http_context::handler_t post_lora_adapters;
     server_http_context::handler_t get_vram;
     server_http_context::handler_t post_vram;
+    server_http_context::handler_t get_sandwich_telemetry;
+    server_http_context::handler_t get_cockpit;
 
     // to be used in router mode
     json get_model_info() const;

@@ -90,6 +90,33 @@ public:
     size_t promotions_2q() const;
     size_t pollution_quarantined() const;
 
+    // Real-Time Telemetry Interface (Cockpit & Server Monitoring)
+    size_t vram_hits() const;
+    size_t ram_hits() const;
+    size_t total_cold_bytes() const;
+    float  hit_rate() const;
+    float  cpu_share() const;
+    bool   is_uring_active() const;
+
+    struct telemetry {
+        size_t tier1_vram_hits       = 0;
+        size_t tier2_ram_hits        = 0;
+        size_t tier3_cold_fetches    = 0;
+        size_t total_cold_bytes      = 0;
+        size_t ghost_hits            = 0;
+        size_t promotions_2q         = 0;
+        size_t pollution_quarantined = 0;
+        size_t warm_pool_size        = 0;
+        size_t warm_pool_used        = 0;
+        float  hit_rate_pct          = 0.0f;
+        float  cpu_share             = 0.0f;
+        bool   is_3tier_enabled      = false;
+        bool   is_2q_enabled         = false;
+        bool   is_uring_active       = false;
+    };
+
+    telemetry get_telemetry() const;
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

@@ -1764,6 +1764,29 @@ extern "C" {
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
     //
+    // Sandwich.cpp Phase 12 & Cockpit Telemetry
+    //
+
+    struct llama_moe_telemetry_c {
+        uint64_t tier1_vram_hits;
+        uint64_t tier2_ram_hits;
+        uint64_t tier3_cold_fetches;
+        uint64_t total_cold_bytes;
+        uint64_t ghost_hits;
+        uint64_t promotions_2q;
+        uint64_t pollution_quarantined;
+        uint64_t warm_pool_size;
+        uint64_t warm_pool_used;
+        float    hit_rate_pct;
+        float    cpu_share;
+        bool     is_3tier_enabled;
+        bool     is_2q_enabled;
+        bool     is_uring_active;
+    };
+
+    LLAMA_API struct llama_moe_telemetry_c llama_get_moe_telemetry(const struct llama_context * ctx);
+
+    //
     // training
     //
 

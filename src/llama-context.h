@@ -224,6 +224,7 @@ struct llama_context {
     void perf_reset();
 
     llama_memory_breakdown memory_breakdown() const;
+    const llama_moe_cache * get_moe_cache() const { return moe_cache.get(); }
 
     //
     // training
