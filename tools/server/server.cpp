@@ -173,13 +173,6 @@ static void server_register_routes(server_http_context & ctx_http, server_routes
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
-    ctx_http.get ("/v1/vram",                  ex_wrapper(routes.get_vram));
-    ctx_http.post("/v1/vram",                  ex_wrapper(routes.post_vram));
-    ctx_http.get ("/v1/sandwich/telemetry",     ex_wrapper(routes.get_sandwich_telemetry));
-    ctx_http.get ("/sandwich/telemetry",        ex_wrapper(routes.get_sandwich_telemetry));
-    ctx_http.get ("/cockpit",                  ex_wrapper(routes.get_cockpit));
-    ctx_http.get ("/sandwich",                 ex_wrapper(routes.get_cockpit));
-    ctx_http.get ("/sandwich/cockpit",         ex_wrapper(routes.get_cockpit));
     ctx_http.get ("/models",                   ex_wrapper(routes.get_models));
     ctx_http.get ("/v1/models",                ex_wrapper(routes.get_models));
     ctx_http.post("/completion",               ex_wrapper(routes.post_completions)); // legacy
@@ -345,7 +338,6 @@ static void server_install_signal_handlers() {
 static bool server_on_listening(server_http_context & ctx_http, const common_params & params, server_connect & connect_proc) {
     for (const auto & address : ctx_http.listening_addresses) {
         SRV_INF("listening on %s\n", address.c_str());
-        SRV_INF("Sandwich Visual Inference Cockpit: %s/cockpit\n", address.c_str());
     }
 
     if (params.server_connect && !connect_proc.start(params, ctx_http.port)) {

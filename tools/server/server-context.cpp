@@ -1,6 +1,4 @@
 #include "server-context.h"
-#include "token_odometer.hpp"
-#include "cockpit_html.hpp"
 #include <atomic>
 #include <thread>
 #include "base64.hpp"
@@ -1076,10 +1074,6 @@ public:
 
     void reset_metrics_bucket() {
         metrics.reset_bucket();
-    }
-
-    llama_context * get_llama_context() const {
-        return ctx_tgt;
     }
 
 private:
@@ -5248,9 +5242,6 @@ private:
         for (size_t i = 0; i < src.size(); i++) {
             dst[i] += src[i];
         }
-
-        // Record in Sandwich Lifetime Token Odometer
-        sandwich::TokenOdometer::instance().record_completion(slot.stats.n_prompt_processed, n, t_us);
     }
 };
 
@@ -6051,89 +6042,6 @@ void server_routes::init_routes() {
             {"moe_cache_size_mb", elastic_target_budget_mb},
             {"moe_warm_ram_mb", elastic_warm_ram_mb}
         });
-        return res;
-    };
-
-    // Sandwich.cpp Live Cockpit Telemetry Endpoint
-    this->get_sandwich_telemetry = [this](const server_http_req &) {
-        auto res = create_response(true);
-
-        json data;
-
-        // 1. Hardware metrics
-        size_t vram_total_mb = 0;
-        size_t vram_free_mb = 0;
-#if defined(GGML_USE_CUDA)
-        size_t free_b = 0, total_b = 0;
-        ggml_backend_cuda_get_device_memory(0, &free_b, &total_b);
-        vram_total_mb = total_b / (1024 * 1024);
-        vram_free_mb  = free_b / (1024 * 1024);
-#endif
-        if (vram_total_mb == 0) {
-            vram_total_mb = 8151;
-            vram_free_mb  = 7798;
-        }
-        size_t vram_used_mb = vram_total_mb > vram_free_mb ? (vram_total_mb - vram_free_mb) : 0;
-
-        data["hardware"]["vram_total_mb"] = (int64_t)vram_total_mb;
-        data["hardware"]["vram_used_mb"] = (int64_t)vram_used_mb;
-        data["hardware"]["vram_free_mb"] = (int64_t)vram_free_mb;
-        data["hardware"]["vram_guard_mb"] = (int64_t)7800;
-        data["hardware"]["ram_max_safe_ratio"] = 0.70;
-
-        // 2. MoE 3-tier telemetry
-        llama_moe_telemetry_c moe_tel = {};
-        llama_context * lctx = ctx_server.get_llama_context();
-        if (lctx) {
-            moe_tel = llama_get_moe_telemetry(lctx);
-        }
-
-        data["moe_3tier"]["enabled"] = moe_tel.is_3tier_enabled;
-        data["moe_3tier"]["tier1_vram_hits"] = (int64_t)moe_tel.tier1_vram_hits;
-        data["moe_3tier"]["tier2_ram_hits"] = (int64_t)moe_tel.tier2_ram_hits;
-        data["moe_3tier"]["tier3_cold_fetches"] = (int64_t)moe_tel.tier3_cold_fetches;
-        data["moe_3tier"]["total_cold_mb"] = moe_tel.total_cold_bytes / (1024.0 * 1024.0);
-        data["moe_3tier"]["warm_pool_size_mb"] = (int64_t)(moe_tel.warm_pool_size / (1024 * 1024));
-        data["moe_3tier"]["warm_pool_used_mb"] = (int64_t)(moe_tel.warm_pool_used / (1024 * 1024));
-        data["moe_3tier"]["hit_rate_pct"] = (double)moe_tel.hit_rate_pct;
-        data["moe_3tier"]["cpu_share"] = (double)moe_tel.cpu_share;
-        data["moe_3tier"]["io_uring_active"] = moe_tel.is_uring_active;
-        data["moe_3tier"]["ghost_cache_hits"] = (int64_t)moe_tel.ghost_hits;
-        data["moe_3tier"]["promotions_2q"] = (int64_t)moe_tel.promotions_2q;
-        data["moe_3tier"]["pollution_quarantined"] = (int64_t)moe_tel.pollution_quarantined;
-
-        // 3. Speculative metrics
-        bool spec_active = !params.speculative.types.empty() && params.speculative.types[0] != COMMON_SPECULATIVE_TYPE_NONE;
-        data["speculative"]["active"] = spec_active;
-        data["speculative"]["n_draft"] = params.speculative.draft.n_max;
-        data["speculative"]["draft_accepted"] = (int64_t)ctx_server.get_metrics().n_draft_accepted;
-        data["speculative"]["draft_tokens"] = (int64_t)ctx_server.get_metrics().n_draft_tokens;
-        double acceptance_rate = ctx_server.get_metrics().n_draft_tokens > 0 ?
-            (double)ctx_server.get_metrics().n_draft_accepted / (double)ctx_server.get_metrics().n_draft_tokens : 0.0;
-        data["speculative"]["acceptance_rate"] = acceptance_rate;
-        data["speculative"]["speedup"] = 1.0 + acceptance_rate;
-
-        // 4. Lifetime Token-Board (Odometer)
-        auto odo = sandwich::TokenOdometer::instance().get_data();
-        data["token_board"]["lifetime_tokens"] = (int64_t)odo.lifetime_tokens;
-        data["token_board"]["lifetime_prompt_tokens"] = (int64_t)odo.lifetime_prompt_tokens;
-        data["token_board"]["lifetime_compute_ms"] = (int64_t)odo.lifetime_compute_ms;
-        data["token_board"]["total_sessions"] = (int64_t)odo.total_sessions;
-        data["token_board"]["session_tokens"] = (int64_t)odo.session_tokens;
-        data["token_board"]["session_prompt_tokens"] = (int64_t)odo.session_prompt_tokens;
-        data["token_board"]["cost_saved_usd"] = (double)odo.cost_saved_usd;
-        data["token_board"]["milestone_badge"] = odo.milestone_badge;
-
-        res->ok(data);
-        return res;
-    };
-
-    // Sandwich.cpp Visual Inference Cockpit UI Endpoint
-    this->get_cockpit = [this](const server_http_req &) {
-        auto res = create_response(true);
-        res->content_type = "text/html; charset=utf-8";
-        res->data = sandwich::get_cockpit_html();
-        res->status = 200;
         return res;
     };
 

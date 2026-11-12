@@ -5713,26 +5713,3 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
 }
-
-llama_moe_telemetry_c llama_get_moe_telemetry(const struct llama_context * ctx) {
-    if (ctx && ctx->get_moe_cache()) {
-        auto t = ctx->get_moe_cache()->get_telemetry();
-        llama_moe_telemetry_c c;
-        c.tier1_vram_hits       = t.tier1_vram_hits;
-        c.tier2_ram_hits        = t.tier2_ram_hits;
-        c.tier3_cold_fetches    = t.tier3_cold_fetches;
-        c.total_cold_bytes      = t.total_cold_bytes;
-        c.ghost_hits            = t.ghost_hits;
-        c.promotions_2q         = t.promotions_2q;
-        c.pollution_quarantined = t.pollution_quarantined;
-        c.warm_pool_size        = t.warm_pool_size;
-        c.warm_pool_used        = t.warm_pool_used;
-        c.hit_rate_pct          = t.hit_rate_pct;
-        c.cpu_share             = t.cpu_share;
-        c.is_3tier_enabled      = t.is_3tier_enabled;
-        c.is_2q_enabled         = t.is_2q_enabled;
-        c.is_uring_active       = t.is_uring_active;
-        return c;
-    }
-    return {};
-}
